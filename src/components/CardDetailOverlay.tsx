@@ -3,17 +3,25 @@ import type { CardRef } from '@/types/card'
 type Props = {
   card: CardRef
   onClose: () => void
+  /** Tap opened this to read — offer select for destination-bar moves. */
+  onSelectForMove?: () => void
+  /** Battlefield only: tap/untap without closing. */
+  onToggleTap?: () => void
 }
 
 function online(): boolean {
   return typeof navigator === 'undefined' || navigator.onLine
 }
 
-export function CardDetailOverlay({ card, onClose }: Props) {
-  const src =
-    online()
-      ? card.imageLarge ?? card.imageNormal ?? card.imageSmall
-      : undefined
+export function CardDetailOverlay({
+  card,
+  onClose,
+  onSelectForMove,
+  onToggleTap,
+}: Props) {
+  const src = online()
+    ? (card.imageLarge ?? card.imageNormal ?? card.imageSmall)
+    : undefined
 
   return (
     <div
@@ -64,6 +72,28 @@ export function CardDetailOverlay({ card, onClose }: Props) {
             <p className="tabular-nums text-slate-200">
               {card.power}/{card.toughness}
             </p>
+          )}
+          {(onSelectForMove || onToggleTap) && (
+            <div className="flex flex-wrap gap-2 pt-2">
+              {onSelectForMove && (
+                <button
+                  type="button"
+                  className="min-h-10 flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white"
+                  onClick={onSelectForMove}
+                >
+                  Select for move
+                </button>
+              )}
+              {onToggleTap && (
+                <button
+                  type="button"
+                  className="min-h-10 flex-1 rounded-lg bg-amber-700 px-3 py-2 text-sm font-medium text-white"
+                  onClick={onToggleTap}
+                >
+                  Tap / Untap
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>

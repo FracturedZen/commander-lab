@@ -3,6 +3,7 @@ import {
   chooseHeuristicAction,
 } from '@/lib/ai/heuristicOpponent'
 import { expandDeckCards } from '@/lib/deck/legality'
+import { hydrateCardRefs } from '@/lib/scryfall/hydrate'
 import {
   DEFAULT_TURN_DRAWS,
   nextPhaseInOrder,
@@ -784,10 +785,16 @@ export function useTableSession() {
         pushLog('Deck not found.')
         return false
       }
-      const commanders: CardRef[] = []
-      if (deck.commander) commanders.push(deck.commander)
-      if (deck.partner) commanders.push(deck.partner)
-      const library = expandDeckCards(deck.cards)
+      const commandersRaw: CardRef[] = []
+      if (deck.commander) commandersRaw.push(deck.commander)
+      if (deck.partner) commandersRaw.push(deck.partner)
+      const libraryRaw = expandDeckCards(deck.cards)
+      const hydratedAll = await hydrateCardRefs([
+        ...libraryRaw,
+        ...commandersRaw,
+      ])
+      const library = hydratedAll.slice(0, libraryRaw.length)
+      const commanders = hydratedAll.slice(libraryRaw.length)
       const next = buildPlayerFromCards(
         `p${seatIndex + 1}`,
         seatIndex === 0 ? 'You' : `Seat ${seatIndex + 1}`,
@@ -847,10 +854,16 @@ export function useTableSession() {
             seats.push(emptyPlayer(`p${i + 1}`, `Seat ${i + 1}`))
             continue
           }
-          const commanders: CardRef[] = []
-          if (deck.commander) commanders.push(deck.commander)
-          if (deck.partner) commanders.push(deck.partner)
-          const library = expandDeckCards(deck.cards)
+          const commandersRaw: CardRef[] = []
+          if (deck.commander) commandersRaw.push(deck.commander)
+          if (deck.partner) commandersRaw.push(deck.partner)
+          const libraryRaw = expandDeckCards(deck.cards)
+          const hydratedAll = await hydrateCardRefs([
+            ...libraryRaw,
+            ...commandersRaw,
+          ])
+          const library = hydratedAll.slice(0, libraryRaw.length)
+          const commanders = hydratedAll.slice(libraryRaw.length)
           let p = buildPlayerFromCards(
             `p${i + 1}`,
             i === 0 ? 'You' : `Seat ${i + 1}`,

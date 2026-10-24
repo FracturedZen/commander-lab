@@ -2,7 +2,7 @@
 
 Offline-first **Commander (EDH)** digital tabletop, deck builder, bulk testing, and AI coaching app.
 
-**v0.5.0** — Arena-inspired table UX (cyan activatable glow, phase rail, hand fan, card detail, stack stub) + full card art (one printing per `oracle_id`).
+**v0.5.1** — Arena-inspired table UX (cyan activatable glow, phase rail, hand fan, card detail, stack stub) + full card art (one printing per `oracle_id`).
 
 **v0.4.2** — Arena-style cyan glow on cards with a legal action now (play / tap / effect target).
 
@@ -49,6 +49,11 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 
 ## Features
 
+### Table zone rules (Arena-style)
+Zone moves always go through `checkZoneMove` — sandbox only shows debug **Grant** buttons, it does not unlock free library/GY/exile cheats. Auto draw-step draws still work. See `src/lib/rules/moveLegality.ts` for the from→to matrix; run `npm run test:rules`.
+
+
+
 ### Cards (Scryfall sync)
 1. Open **Cards** → **Sync cards** (needs network once; ~25&nbsp;MB gzipped JSONL).
 2. App decompresses in-browser and indexes trimmed fields into IndexedDB (chunked writes).
@@ -70,14 +75,14 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 - **Automatic turns:** End turn rotates hotseat, untaps permanents, draws 1; Next phase walks the phase wheel.
 - Turn banner always shows active player + phase.
 - Large tappable life totals + commander damage matrix.
-- Drag-and-drop **or** tap-to-move; tap battlefield card → Tap/Untap.
+- Drag-and-drop to move; **tap a card to read** (full art + oracle); overlay has Select for move / Tap·Untap.
 - Bundled starters: **Krenko, Mob Boss** and **Aesi, Tyrant of Gyre Strait**.
 - Save / restore session; custom background blob; local AI step heuristic.
 
 
 ## Inspired by MTG Arena (adopted vs deferred)
 
-**Adopted in v0.5**
+**Adopted in v0.5.1**
 - Soft cyan/white **glow** on cards with a legal action right now (playable hand, castable commander, untapped permanents as tap stand-in, pending-effect targets).
 - **Phase rail** (Beg / Main / Combat / Main / End) with orange “your turn” / blue opponent styling cues.
 - **Hand fan** bottom dock with overlap + lift on hover/select.

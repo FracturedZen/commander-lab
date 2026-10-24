@@ -1,6 +1,25 @@
 /**
- * Which zone-to-zone moves are legal under Strict rules vs sandbox.
- * Pending actions (mill, tutor, return from GY, etc.) temporarily unlock paths.
+ * Arena-style zone legality (pragmatic — not a full rules engine).
+ *
+ * Allowed matrix (empty pendingActions):
+ *   hand → battlefield     main1/main2 only (cast/play shortcut)
+ *   command → battlefield  main1/main2 only (cast commander)
+ *   battlefield → graveyard / exile / command(commander)
+ *   graveyard → command    commanders only (death trigger shortcut)
+ *   everything else        DENIED until a matching pendingAction unlocks it
+ *
+ * Pending unlocks:
+ *   draw/tutor          library → hand
+ *   mill                library → graveyard
+ *   exileFromLibrary/tutor  library → exile
+ *   putFromLibrary/tutor    library → battlefield
+ *   discard             hand → graveyard
+ *   returnFromGy        graveyard → hand / library
+ *   putFromGy/returnFromGy  graveyard → battlefield
+ *   returnFromExile     exile → hand / battlefield
+ *
+ * Auto draw-step draws use resolveDraws (not this). Sandbox (rulesStrict=false)
+ * only enables debug Grant-* / free-Draw UI — it does NOT bypass this matrix.
  */
 
 import type { Phase } from './turnMachine'
@@ -49,7 +68,9 @@ function findAction(
 
 /**
  * Baseline + effect-queue legality for moving one card from → to.
- * Sandbox (rulesStrict=false): everything allowed.
+ * Always enforced (sandbox only toggles debug Grant UI, not this matrix).
+ * `rulesStrict` is kept for API compatibility / glow helpers; it does not
+ * open free zone cheats.
  */
 export function checkZoneMove(opts: {
   from: ZoneName
@@ -62,20 +83,72 @@ export function checkZoneMove(opts: {
   isCommander?: boolean
   mulliganOpen?: boolean
 }): MoveCheck {
-  const { from, to, rulesStrict, phase, playerId, pendingActions, isCommander } =
-    opts
+  const { from, to, phase, playerId, pendingActions, isCommander } = opts
+  void opts.rulesStrict // sandbox no longer bypasses the matrix
 
   if (from === to) {
     return { allowed: false, reason: 'Already in that zone.' }
   }
 
-  if (!rulesStrict) {
-    return { allowed: true }
+  // Library top access ALWAYS needs a pending effect.
+  // Free Top → Hand / BF / GY / exile cheats are never legal (auto draw uses resolveDraws).
+  if (from === 'library') {
+    if (to === 'hand') {
+      const act = findAction(pendingActions, playerId, ['draw', 'tutor'])
+      if (act) return { allowed: true, consumeActionId: act.id }
+      return {
+        allowed: false,
+        reason:
+          'Needs a draw or tutor effect. (Turn draws happen automatically on the draw step.)',
+      }
+    }
+    if (to === 'graveyard') {
+      const act = findAction(pendingActions, playerId, ['mill'])
+      if (act) return { allowed: true, consumeActionId: act.id }
+      return {
+        allowed: false,
+        reason: 'Needs a mill effect. No free “top → graveyard.”',
+      }
+    }
+    if (to === 'exile') {
+      const act = findAction(pendingActions, playerId, [
+        'exileFromLibrary',
+        'tutor',
+      ])
+      if (act) return { allowed: true, consumeActionId: act.id }
+      return {
+        allowed: false,
+        reason: 'Needs an exile-from-library or tutor effect.',
+      }
+    }
+    if (to === 'battlefield') {
+      const act = findAction(pendingActions, playerId, [
+        'putFromLibrary',
+        'tutor',
+      ])
+      if (act && (!act.toZone || act.toZone === 'battlefield')) {
+        return { allowed: true, consumeActionId: act.id }
+      }
+      return {
+        allowed: false,
+        reason: 'Needs a “put onto battlefield” or tutor effect.',
+      }
+    }
+    return {
+      allowed: false,
+      reason: 'Library access needs a card effect.',
+    }
   }
 
-  // --- Always-OK commander aids ---
+  // --- Always-OK commander / battlefield aids ---
   if (from === 'command' && to === 'battlefield') {
-    return { allowed: true }
+    if (MAIN_PHASES.includes(phase)) {
+      return { allowed: true }
+    }
+    return {
+      allowed: false,
+      reason: 'Cast your commander during a main phase.',
+    }
   }
   if (from === 'battlefield' && to === 'command' && isCommander) {
     return { allowed: true }
@@ -132,54 +205,6 @@ export function checkZoneMove(opts: {
     return {
       allowed: false,
       reason: 'Needs a card effect for that zone change.',
-    }
-  }
-
-  // Library → anywhere: needs draw/mill/tutor/put pending (draw step uses resolveDraws, not this)
-  if (from === 'library') {
-    if (to === 'hand') {
-      const act = findAction(pendingActions, playerId, ['draw', 'tutor'])
-      if (act) return { allowed: true, consumeActionId: act.id }
-      return {
-        allowed: false,
-        reason: 'Needs a draw or tutor effect. (Turn draws happen automatically on the draw step.)',
-      }
-    }
-    if (to === 'graveyard') {
-      const act = findAction(pendingActions, playerId, ['mill'])
-      if (act) return { allowed: true, consumeActionId: act.id }
-      return {
-        allowed: false,
-        reason: 'Needs a mill effect. No free “top → graveyard.”',
-      }
-    }
-    if (to === 'exile') {
-      const act = findAction(pendingActions, playerId, [
-        'exileFromLibrary',
-        'tutor',
-      ])
-      if (act) return { allowed: true, consumeActionId: act.id }
-      return {
-        allowed: false,
-        reason: 'Needs an exile-from-library or tutor effect.',
-      }
-    }
-    if (to === 'battlefield') {
-      const act = findAction(pendingActions, playerId, [
-        'putFromLibrary',
-        'tutor',
-      ])
-      if (act && (!act.toZone || act.toZone === 'battlefield')) {
-        return { allowed: true, consumeActionId: act.id }
-      }
-      return {
-        allowed: false,
-        reason: 'Needs a “put onto battlefield” or tutor effect.',
-      }
-    }
-    return {
-      allowed: false,
-      reason: 'Library access needs a card effect under strict rules.',
     }
   }
 
@@ -321,7 +346,7 @@ export function cardCanActivate(opts: {
 
   // Command: cast commander → BF (prefer main phase under strict)
   if (zone === 'command') {
-    if (rulesStrict && !MAIN_PHASES.includes(phase)) return false
+    if (!MAIN_PHASES.includes(phase)) return false
     const cast = checkZoneMove({
       from: 'command',
       to: 'battlefield',

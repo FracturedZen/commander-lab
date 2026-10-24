@@ -6,6 +6,7 @@ import {
   type SyncProgress,
 } from '@/lib/scryfall/sync'
 import { CardSearch } from '@/components/CardSearch'
+import { installSampleDecks } from '@/lib/sample-decks/install'
 import type { CardRef } from '@/types/card'
 
 export function CardsPage() {
@@ -35,6 +36,16 @@ export function CardsPage() {
         abortRef.current.signal,
       )
       setMeta(next)
+      try {
+        await installSampleDecks()
+        setProgress({
+          phase: 'done',
+          message: `Synced ${next.cardCount.toLocaleString()} cards · starter decks refreshed with art.`,
+          fraction: 1,
+        })
+      } catch {
+        /* sample refresh is best-effort */
+      }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         setProgress({ phase: 'error', message: 'Sync cancelled.' })

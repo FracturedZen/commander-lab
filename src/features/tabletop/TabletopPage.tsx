@@ -68,7 +68,11 @@ export function TabletopPage() {
   const [dragOverZone, setDragOverZone] = useState<ZoneName | null>(null)
   const [setupSeats, setSetupSeats] = useState(1)
   const [setupDecks, setSetupDecks] = useState<(string | null)[]>([null])
-  const [inspectCard, setInspectCard] = useState<CardRef | null>(null)
+  const [inspect, setInspect] = useState<{
+    card: CardRef
+    zone: ZoneName
+    instanceId: string
+  } | null>(null)
 
   useEffect(() => {
     setSetupDecks((prev) => {
@@ -76,22 +80,6 @@ export function TabletopPage() {
       return next
     })
   }, [setupSeats])
-
-  function onCardSelect(zone: ZoneName, instanceId: string) {
-    if (
-      selectedInstance &&
-      selectedInstance.instanceId === instanceId &&
-      selectedInstance.zone === zone
-    ) {
-      setSelectedInstance(null)
-      return
-    }
-    setSelectedInstance({
-      playerId: player.id,
-      zone,
-      instanceId,
-    })
-  }
 
   function onDropTo(zone: ZoneName) {
     setDragOverZone(null)
@@ -182,7 +170,7 @@ export function TabletopPage() {
             Cyan glow = legal play / tap / effect target. Long-press or{' '}
             <span className="text-sky-300">i</span> for full card. Stack panel is
             a stub (priority engine later).
-            {rulesStrict ? ' Strict zone rules on.' : ' Sandbox moves on.'}
+            {rulesStrict ? ' Arena zone rules on.' : ' Debug grants on (zone rules still enforced).'}
           </p>
         </div>
       ) : (
@@ -452,7 +440,8 @@ export function TabletopPage() {
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-100">
             <span>Move to:</span>
             {MOVE_ZONES.filter((z) => z !== selectedInstance.zone).map((z) => {
-              const ok = !rulesStrict || legalZones.has(z)
+              // legalDestinations already enforces library-pending even in sandbox
+              const ok = legalZones.has(z)
               return (
                 <button
                   key={z}
@@ -498,7 +487,7 @@ export function TabletopPage() {
             >
               Cancel
             </button>
-            {rulesStrict && legal.length === 0 && (
+            {legal.length === 0 && (
               <span className="w-full text-[10px] text-amber-200/80">
                 No legal destinations right now — needs a card effect (draw,
                 mill, tutor, discard, reanimate…).
@@ -577,8 +566,20 @@ export function TabletopPage() {
                     draggable
                     selected={selectedInstance?.instanceId === c.instanceId}
                     highlighted={isCardHighlighted('command', c)}
-                    onClick={() => onCardSelect('command', c.instanceId)}
-                    onInspect={() => setInspectCard(c.card)}
+                    onClick={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'command',
+                        instanceId: c.instanceId,
+                      })
+                    }
+                    onInspect={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'command',
+                        instanceId: c.instanceId,
+                      })
+                    }
                     onDragStart={() =>
                       setSelectedInstance({
                         playerId: player.id,
@@ -604,8 +605,20 @@ export function TabletopPage() {
                     draggable
                     selected={selectedInstance?.instanceId === c.instanceId}
                     highlighted={isCardHighlighted('graveyard', c)}
-                    onClick={() => onCardSelect('graveyard', c.instanceId)}
-                    onInspect={() => setInspectCard(c.card)}
+                    onClick={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'graveyard',
+                        instanceId: c.instanceId,
+                      })
+                    }
+                    onInspect={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'graveyard',
+                        instanceId: c.instanceId,
+                      })
+                    }
                     onDragStart={() =>
                       setSelectedInstance({
                         playerId: player.id,
@@ -631,8 +644,20 @@ export function TabletopPage() {
                     draggable
                     selected={selectedInstance?.instanceId === c.instanceId}
                     highlighted={isCardHighlighted('exile', c)}
-                    onClick={() => onCardSelect('exile', c.instanceId)}
-                    onInspect={() => setInspectCard(c.card)}
+                    onClick={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'exile',
+                        instanceId: c.instanceId,
+                      })
+                    }
+                    onInspect={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'exile',
+                        instanceId: c.instanceId,
+                      })
+                    }
                     onDragStart={() =>
                       setSelectedInstance({
                         playerId: player.id,
@@ -653,8 +678,8 @@ export function TabletopPage() {
             >
               {player.zones.battlefield.length === 0 ? (
                 <p className="p-3 text-xs text-emerald-100/35">
-                  Battlefield empty — tap a hand card, then Battlefield (or
-                  drag).
+                  Battlefield empty — tap a card to read it, Select for move, or
+                  drag.
                 </p>
               ) : (
                 player.zones.battlefield.map((c) => (
@@ -666,8 +691,20 @@ export function TabletopPage() {
                     tapped={c.tapped}
                     selected={selectedInstance?.instanceId === c.instanceId}
                     highlighted={isCardHighlighted('battlefield', c)}
-                    onClick={() => onCardSelect('battlefield', c.instanceId)}
-                    onInspect={() => setInspectCard(c.card)}
+                    onClick={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'battlefield',
+                        instanceId: c.instanceId,
+                      })
+                    }
+                    onInspect={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'battlefield',
+                        instanceId: c.instanceId,
+                      })
+                    }
                     onDragStart={() =>
                       setSelectedInstance({
                         playerId: player.id,
@@ -705,12 +742,10 @@ export function TabletopPage() {
                       const libLegal = new Set(
                         getLegalDestinations('library').map((l) => l.zone),
                       )
-                      const showHand =
-                        !rulesStrict || libLegal.has('hand')
-                      const showBf =
-                        !rulesStrict || libLegal.has('battlefield')
-                      const showGy =
-                        !rulesStrict || libLegal.has('graveyard')
+                      // Never show free top cheats — pending effect only (Strict on or off)
+                      const showHand = libLegal.has('hand')
+                      const showBf = libLegal.has('battlefield')
+                      const showGy = libLegal.has('graveyard')
                       return (
                         <>
                           {showHand && (
@@ -734,10 +769,7 @@ export function TabletopPage() {
                               Top → GY
                             </TinyButton>
                           )}
-                          {rulesStrict &&
-                            !showHand &&
-                            !showBf &&
-                            !showGy && (
+                          {!showHand && !showBf && !showGy && (
                               <p className="px-0.5 text-[9px] leading-snug text-emerald-100/45">
                                 Top-of-library moves need a draw/mill/tutor
                                 effect.
@@ -800,8 +832,20 @@ export function TabletopPage() {
                             selectedInstance?.instanceId === c.instanceId
                           }
                           highlighted={isCardHighlighted('hand', c)}
-                          onClick={() => onCardSelect('hand', c.instanceId)}
-                          onInspect={() => setInspectCard(c.card)}
+                          onClick={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'hand',
+                        instanceId: c.instanceId,
+                      })
+                    }
+                    onInspect={() =>
+                      setInspect({
+                        card: c.card,
+                        zone: 'hand',
+                        instanceId: c.instanceId,
+                      })
+                    }
                           onDragStart={() =>
                             setSelectedInstance({
                               playerId: player.id,
@@ -820,10 +864,25 @@ export function TabletopPage() {
         )}
       </div>
 
-      {inspectCard && (
+      {inspect && (
         <CardDetailOverlay
-          card={inspectCard}
-          onClose={() => setInspectCard(null)}
+          card={inspect.card}
+          onClose={() => setInspect(null)}
+          onSelectForMove={() => {
+            setSelectedInstance({
+              playerId: player.id,
+              zone: inspect.zone,
+              instanceId: inspect.instanceId,
+            })
+            setInspect(null)
+          }}
+          onToggleTap={
+            inspect.zone === 'battlefield'
+              ? () => {
+                  toggleTap(inspect.instanceId)
+                }
+              : undefined
+          }
         />
       )}
 
