@@ -19,6 +19,7 @@ import {
   type PendingAction,
   type PendingActionType,
 } from '@/lib/rules/moveLegality'
+import { checkPlayOrCast } from '@/lib/rules/mana'
 import { shuffle } from '@/lib/shuffle'
 import { BLOB_KEYS, deleteBlob, getBlob, putBlob } from '@/lib/storage/blobs'
 import { getDeck, listDecks } from '@/lib/storage/decks'
@@ -34,7 +35,7 @@ import {
   SETTINGS_KEYS,
 } from '@/lib/storage/settings'
 import { installSampleDecks } from '@/lib/sample-decks/install'
-import type { CardInstance, CardRef } from '@/types/card'
+import { isLand, type CardInstance, type CardRef } from '@/types/card'
 import type { Deck } from '@/types/deck'
 import type {
   PlayerState,
@@ -72,6 +73,8 @@ function emptyPlayer(id: string, name: string): PlayerState {
     zones: emptyZones(),
     pendingDraws: 0,
     hasLost: false,
+    landsPlayedThisTurn: 0,
+    commanderCastCount: 0,
   }
 }
 
@@ -91,6 +94,8 @@ function buildPlayerFromCards(
     deckId,
     pendingDraws: 0,
     hasLost: false,
+    landsPlayedThisTurn: 0,
+    commanderCastCount: 0,
     zones: {
       ...emptyZones(),
       library: toInstances(shuffled),
@@ -124,6 +129,8 @@ function normalizePlayer(p: PlayerState): PlayerState {
     ...p,
     pendingDraws: p.pendingDraws ?? 0,
     hasLost: p.hasLost ?? false,
+    landsPlayedThisTurn: p.landsPlayedThisTurn ?? 0,
+    commanderCastCount: p.commanderCastCount ?? 0,
   }
 }
 
@@ -214,6 +221,7 @@ function beginTurnPlayer(p: PlayerState): PlayerState {
   return {
     ...untapPlayer(p),
     pendingDraws: DEFAULT_TURN_DRAWS,
+    landsPlayedThisTurn: 0,
   }
 }
 
@@ -237,8 +245,6 @@ export function useTableSession() {
     zone: ZoneName
     instanceId: string
   } | null>(null)
-  const [aiMana, setAiMana] = useState(0)
-  const [aiLandsPlayed, setAiLandsPlayed] = useState(0)
   const [busy, setBusy] = useState(false)
   /** When true (default), free Draw is blocked; auto-draw on draw step only. */
   const [rulesStrict, setRulesStrictState] = useState(true)
@@ -500,8 +506,6 @@ export function useTableSession() {
         nextIdx === 0 ? fromTurn.turnNumber + 1 : fromTurn.turnNumber
 
       setActiveSeat(nextIdx)
-      setAiLandsPlayed(0)
-      setAiMana(0)
       setMulliganOpen(false)
 
       setPlayers((prev) => {
@@ -750,8 +754,8 @@ export function useTableSession() {
   )
 
   const getLegalDestinations = useCallback(
-    (from: ZoneName, isCommander?: boolean) => {
-      return legalDestinations({
+    (from: ZoneName, isCommander?: boolean, card?: CardRef) => {
+      const dests = legalDestinations({
         from,
         rulesStrict,
         phase: turn.phase,
@@ -759,8 +763,34 @@ export function useTableSession() {
         pendingActions,
         isCommander,
       })
+      // Filter BF when the selected card cannot be played/cast right now.
+      if (
+        card &&
+        (from === 'hand' || from === 'command') &&
+        dests.some((d) => d.zone === 'battlefield')
+      ) {
+        const play = checkPlayOrCast({
+          card,
+          from,
+          landsPlayedThisTurn: player.landsPlayedThisTurn ?? 0,
+          battlefield: player.zones.battlefield,
+          commanderCastCount: player.commanderCastCount ?? 0,
+        })
+        if (!play.allowed) {
+          return dests.filter((d) => d.zone !== 'battlefield')
+        }
+      }
+      return dests
     },
-    [pendingActions, player.id, rulesStrict, turn.phase],
+    [
+      pendingActions,
+      player.commanderCastCount,
+      player.id,
+      player.landsPlayedThisTurn,
+      player.zones.battlefield,
+      rulesStrict,
+      turn.phase,
+    ],
   )
 
   const moveCard = useCallback(
@@ -791,6 +821,30 @@ export function useTableSession() {
         return
       }
 
+      let tapIds: string[] = []
+      let countsAsLandDrop = false
+      let countsAsCommanderCast = false
+      if (
+        toZone === 'battlefield' &&
+        (fromZone === 'hand' || fromZone === 'command')
+      ) {
+        const play = checkPlayOrCast({
+          card: card.card,
+          from: fromZone,
+          landsPlayedThisTurn: seat.landsPlayedThisTurn ?? 0,
+          battlefield: seat.zones.battlefield,
+          commanderCastCount: seat.commanderCastCount ?? 0,
+        })
+        if (!play.allowed) {
+          blockMove(play.reason ?? 'Not enough mana')
+          return
+        }
+        tapIds = play.tapIds ?? []
+        countsAsLandDrop = Boolean(play.countsAsLandDrop)
+        countsAsCommanderCast = Boolean(play.countsAsCommanderCast)
+      }
+
+      const tapSet = new Set(tapIds)
       setPlayers((prev) =>
         prev.map((p, i) => {
           if (i !== seatIndex) return p
@@ -803,19 +857,52 @@ export function useTableSession() {
             ...movedCard,
             tapped: toZone === 'battlefield' ? false : movedCard.tapped,
           }
+          let battlefield = p.zones.battlefield
+          if (tapSet.size > 0) {
+            battlefield = battlefield.map((c) =>
+              tapSet.has(c.instanceId) ? { ...c, tapped: true } : c,
+            )
+          }
+          const zones =
+            toZone === 'battlefield'
+              ? {
+                  ...p.zones,
+                  [fromZone]: from,
+                  battlefield: [...battlefield, moved],
+                }
+              : {
+                  ...p.zones,
+                  [fromZone]: from,
+                  [toZone]: [...p.zones[toZone], moved],
+                  ...(tapSet.size > 0 ? { battlefield } : {}),
+                }
           return {
             ...p,
-            zones: {
-              ...p.zones,
-              [fromZone]: from,
-              [toZone]: [...p.zones[toZone], moved],
-            },
+            zones,
+            landsPlayedThisTurn: countsAsLandDrop
+              ? (p.landsPlayedThisTurn ?? 0) + 1
+              : (p.landsPlayedThisTurn ?? 0),
+            commanderCastCount: countsAsCommanderCast
+              ? (p.commanderCastCount ?? 0) + 1
+              : (p.commanderCastCount ?? 0),
           }
         }),
       )
       consumePendingAction(check.consumeActionId)
       setMoveNotice(null)
-      pushLog(`Moved ${fromZone} → ${toZone}`)
+      if (countsAsLandDrop) {
+        pushLog(`Played land: ${card.card.name}`)
+      } else if (countsAsCommanderCast) {
+        pushLog(
+          `Cast commander: ${card.card.name}${tapIds.length ? ` (tapped ${tapIds.length} for mana)` : ''}`,
+        )
+      } else if (tapIds.length > 0) {
+        pushLog(
+          `Cast ${card.card.name} (tapped ${tapIds.length} for mana)`,
+        )
+      } else {
+        pushLog(`Moved ${fromZone} → ${toZone}`)
+      }
       setSelectedInstance(null)
     },
     [
@@ -1038,8 +1125,6 @@ export function useTableSession() {
         setMulliganOpen(true)
         setPendingActions([])
         setMoveNotice(null)
-        setAiLandsPlayed(0)
-        setAiMana(0)
         setSelectedInstance(null)
         pushLog(
           `Game started · ${count} seat(s) · opening hands dealt · commanders out.`,
@@ -1165,25 +1250,23 @@ export function useTableSession() {
 
   const runAiOpponentStep = useCallback(() => {
     if (!gameActive) return
+    const untappedLands = player.zones.battlefield.filter(
+      (c) => isLand(c.card) && !c.tapped,
+    ).length
     const action = chooseHeuristicAction(player, {
-      availableMana: aiMana,
-      landsPlayedThisTurn: aiLandsPlayed,
+      availableMana: untappedLands,
+      landsPlayedThisTurn: player.landsPlayedThisTurn ?? 0,
     })
     if (action.type === 'play_land') {
       moveCard('hand', 'battlefield', action.instanceId)
-      setAiLandsPlayed((n) => n + 1)
-      setAiMana((m) => m + 1)
-      pushLog(`AI: land ${action.name}`)
       return
     }
     if (action.type === 'cast') {
       moveCard('hand', 'battlefield', action.instanceId)
-      setAiMana((m) => Math.max(0, m - action.cmc))
-      pushLog(`AI: cast ${action.name}`)
       return
     }
     pushLog(`AI: pass — ${action.reason}`)
-  }, [aiLandsPlayed, aiMana, gameActive, moveCard, player, pushLog])
+  }, [gameActive, moveCard, player, pushLog])
 
   const isCardHighlighted = useCallback(
     (
@@ -1204,6 +1287,10 @@ export function useTableSession() {
         isActivePlayer: seat.id === turn.activePlayerId,
         gameActive,
         mulliganOpen,
+        card: instance.card,
+        landsPlayedThisTurn: seat.landsPlayedThisTurn ?? 0,
+        battlefield: seat.zones.battlefield,
+        commanderCastCount: seat.commanderCastCount ?? 0,
       })
     },
     [
@@ -1218,7 +1305,47 @@ export function useTableSession() {
     ],
   )
 
+  /** True if dragging the current selection onto `to` would be legal. */
+  const canDropZone = useCallback(
+    (from: ZoneName, to: ZoneName, card?: CardRef, isCommander?: boolean) => {
+      const check = checkZoneMove({
+        from,
+        to,
+        rulesStrict,
+        phase: turn.phase,
+        playerId: player.id,
+        pendingActions,
+        isCommander,
+      })
+      if (!check.allowed) return false
+      if (
+        to === 'battlefield' &&
+        (from === 'hand' || from === 'command') &&
+        card
+      ) {
+        return checkPlayOrCast({
+          card,
+          from,
+          landsPlayedThisTurn: player.landsPlayedThisTurn ?? 0,
+          battlefield: player.zones.battlefield,
+          commanderCastCount: player.commanderCastCount ?? 0,
+        }).allowed
+      }
+      return true
+    },
+    [
+      pendingActions,
+      player.commanderCastCount,
+      player.id,
+      player.landsPlayedThisTurn,
+      player.zones.battlefield,
+      rulesStrict,
+      turn.phase,
+    ],
+  )
+
   return {
+    canDropZone,
     table,
     player,
     players,

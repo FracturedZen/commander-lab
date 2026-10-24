@@ -29,6 +29,10 @@ export interface PlayerState {
   /** True after attempting to draw from an empty library (decked). */
   hasLost: boolean
   loseReason?: 'decked' | 'commander_damage' | 'life' | 'other'
+  /** Lands played this turn (reset on beginTurn). Max 1 under Arena rules. */
+  landsPlayedThisTurn: number
+  /** Times this seat cast their commander from the command zone (tax = 2×). */
+  commanderCastCount: number
 }
 
 export interface TurnState {

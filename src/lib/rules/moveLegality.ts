@@ -23,7 +23,9 @@
  */
 
 import type { Phase } from './turnMachine'
-import type { ZoneName } from '@/types/game'
+import type { ZoneName } from '../../types/game'
+import type { CardInstance, CardRef } from '../../types/card'
+import { checkPlayOrCast } from './mana'
 
 export type PendingActionType =
   | 'draw'
@@ -168,7 +170,8 @@ export function checkZoneMove(opts: {
     return { allowed: true }
   }
 
-  // Cast / play from hand → battlefield (prefer main phase)
+  // Cast / play from hand → battlefield (main phase only).
+  // Mana + land-once are enforced by checkPlayOrCast in the session layer.
   if (from === 'hand' && to === 'battlefield') {
     if (MAIN_PHASES.includes(phase)) {
       return { allowed: true }
@@ -311,6 +314,11 @@ export function cardCanActivate(opts: {
   isActivePlayer: boolean
   gameActive: boolean
   mulliganOpen?: boolean
+  /** Required for accurate hand/command glow (mana + land drop). */
+  card?: CardRef
+  landsPlayedThisTurn?: number
+  battlefield?: CardInstance[]
+  commanderCastCount?: number
 }): boolean {
   const {
     zone,
@@ -322,6 +330,10 @@ export function cardCanActivate(opts: {
     tapped,
     isActivePlayer,
     gameActive,
+    card,
+    landsPlayedThisTurn = 0,
+    battlefield = [],
+    commanderCastCount = 0,
   } = opts
 
   if (!gameActive || !isActivePlayer) return false
@@ -329,7 +341,7 @@ export function cardCanActivate(opts: {
   const hasPending = (types: PendingActionType[]) =>
     Boolean(findAction(pendingActions, playerId, types))
 
-  // Hand: playable this main phase, or discard target
+  // Hand: playable this main phase (land drop or mana payable), or discard target
   if (zone === 'hand') {
     if (hasPending(['discard'])) return true
     const play = checkZoneMove({
@@ -341,10 +353,18 @@ export function cardCanActivate(opts: {
       pendingActions,
       isCommander,
     })
-    return play.allowed
+    if (!play.allowed) return false
+    if (!card) return play.allowed
+    return checkPlayOrCast({
+      card,
+      from: 'hand',
+      landsPlayedThisTurn,
+      battlefield,
+      commanderCastCount,
+    }).allowed
   }
 
-  // Command: cast commander → BF (prefer main phase under strict)
+  // Command: cast commander → BF when mana (incl. tax) is payable
   if (zone === 'command') {
     if (!MAIN_PHASES.includes(phase)) return false
     const cast = checkZoneMove({
@@ -356,7 +376,15 @@ export function cardCanActivate(opts: {
       pendingActions,
       isCommander: true,
     })
-    return cast.allowed
+    if (!cast.allowed) return false
+    if (!card) return cast.allowed
+    return checkPlayOrCast({
+      card,
+      from: 'command',
+      landsPlayedThisTurn,
+      battlefield,
+      commanderCastCount,
+    }).allowed
   }
 
   // Battlefield: untapped permanent = tap-activation stand-in on your turn

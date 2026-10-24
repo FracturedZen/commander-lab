@@ -68,12 +68,14 @@ export function SettingsPage() {
           />
           <span>
             <span className="block text-sm text-white">
-              Hide debug grants (recommended)
+              Hide sandbox debug (recommended)
             </span>
             <span className="mt-0.5 block text-xs text-slate-400">
-              Zone moves always follow Arena-style rules (pending effects unlock
-              mill/tutor/discard/reanimate). When this is on, debug Grant mill /
-              free Draw buttons are hidden. Turn off only to queue test effects.
+              Always enforced: one land per turn, mana payment to cast (auto-taps
+              untapped lands), commander tax (+2 per prior cast), and
+              library/GY/exile only via pending effects. When this is on, debug
+              Grant mill / free Draw stay hidden. Turn off only to queue test
+              effects.
             </span>
           </span>
         </label>

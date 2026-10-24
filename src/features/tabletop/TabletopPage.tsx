@@ -12,15 +12,6 @@ import type { CardInstance, CardRef } from '@/types/card'
 import type { RailSegmentId } from '@/lib/rules/turnMachine'
 import type { ZoneName } from '@/types/game'
 
-const MOVE_ZONES: ZoneName[] = [
-  'hand',
-  'battlefield',
-  'graveyard',
-  'exile',
-  'command',
-  'library',
-]
-
 type LandStack = {
   key: string
   name: string
@@ -71,6 +62,7 @@ export function TabletopPage() {
     rulesStrict,
     grantPendingAction,
     getLegalDestinations,
+    canDropZone,
     isCardHighlighted,
     adjustLife,
     adjustCommanderDamage,
@@ -132,24 +124,58 @@ export function TabletopPage() {
     }
   }, [player.zones.battlefield])
 
+  function selectedCardRef(): CardRef | undefined {
+    if (!selectedInstance) return undefined
+    return player.zones[selectedInstance.zone].find(
+      (c) => c.instanceId === selectedInstance.instanceId,
+    )?.card
+  }
+
   function onDropTo(zone: ZoneName) {
     setDragOverZone(null)
     if (!selectedInstance || !gameActive) return
     if (selectedInstance.zone === zone) return
+    const card = selectedCardRef()
+    if (
+      !canDropZone(
+        selectedInstance.zone,
+        zone,
+        card,
+        Boolean(card?.isCommander),
+      )
+    ) {
+      return
+    }
     moveCard(selectedInstance.zone, zone, selectedInstance.instanceId)
   }
 
   function zoneHandlers(zone: ZoneName) {
+    const card = selectedCardRef()
+    const legal =
+      Boolean(selectedInstance) &&
+      gameActive &&
+      selectedInstance!.zone !== zone &&
+      canDropZone(
+        selectedInstance!.zone,
+        zone,
+        card,
+        Boolean(card?.isCommander),
+      )
     return {
       onDragOver: (e: DragEvent) => {
+        if (!legal) {
+          setDragOverZone(null)
+          return
+        }
         e.preventDefault()
-        if (gameActive) setDragOverZone(zone)
+        setDragOverZone(zone)
       },
       onDrop: (e: DragEvent) => {
         e.preventDefault()
+        if (!legal) return
         onDropTo(zone)
       },
-      dropActive: dragOverZone === zone,
+      dropActive: legal && dragOverZone === zone,
     }
   }
 
@@ -455,8 +481,11 @@ export function TabletopPage() {
           )}
 
           {moveNotice && (
-            <div className="rounded-lg border border-amber-500/40 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
-              {moveNotice}
+            <div
+              role="alert"
+              className="sticky top-0 z-30 rounded-lg border-2 border-rose-400 bg-rose-950 px-3 py-3 text-sm font-semibold text-rose-50 shadow-lg shadow-rose-900/40"
+            >
+              Blocked: {moveNotice}
             </div>
           )}
 
@@ -474,39 +503,32 @@ export function TabletopPage() {
               const legal = getLegalDestinations(
                 selectedInstance.zone,
                 Boolean(card?.card.isCommander),
+                card?.card,
               )
-              const legalZones = new Set(legal.map((l) => l.zone))
               return (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-100">
                   <span>Move to:</span>
-                  {MOVE_ZONES.filter((z) => z !== selectedInstance.zone).map(
-                    (z) => {
-                      const ok = legalZones.has(z)
-                      return (
-                        <button
-                          key={z}
-                          type="button"
-                          disabled={!ok}
-                          className={[
-                            'min-h-9 rounded px-2 py-1 capitalize',
-                            ok
-                              ? 'bg-emerald-800/80'
-                              : 'cursor-not-allowed bg-slate-800/60 text-slate-500 line-through',
-                          ].join(' ')}
-                          onClick={() => {
-                            if (!ok) return
-                            moveCard(
-                              selectedInstance.zone,
-                              z,
-                              selectedInstance.instanceId,
-                            )
-                          }}
-                        >
-                          {z}
-                        </button>
-                      )
-                    },
+                  {legal.length === 0 && (
+                    <span className="text-amber-200">
+                      No legal destinations right now.
+                    </span>
                   )}
+                  {legal.map(({ zone: z }) => (
+                    <button
+                      key={z}
+                      type="button"
+                      className="min-h-9 rounded bg-emerald-800/80 px-2 py-1 capitalize"
+                      onClick={() => {
+                        moveCard(
+                          selectedInstance.zone,
+                          z,
+                          selectedInstance.instanceId,
+                        )
+                      }}
+                    >
+                      {z}
+                    </button>
+                  ))}
                   {selectedInstance.zone === 'battlefield' && (
                     <button
                       type="button"

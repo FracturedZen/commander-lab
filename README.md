@@ -2,6 +2,8 @@
 
 Offline-first **Commander (EDH)** digital tabletop, deck builder, bulk testing, and AI coaching app.
 
+**v0.5.4** — Hard play gates: one land per turn, mana payment (auto-tap untapped lands), commander tax, DnD only highlights legal drops. (Full card-script engine is a separate follow-up.)
+
 **v0.5.3** — Card art fix: sync `default_cards` (has `image_uris`), CDN synthesize + named API fallback; **one re-sync required**.
 
 **v0.5.2** — Arena Pass + auto-advance phases, mini phase ladder with stops, art-first BF with P/T, stacked lands, cleaner phone HUD.
