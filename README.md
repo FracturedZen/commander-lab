@@ -2,6 +2,8 @@
 
 Offline-first **Commander (EDH)** digital tabletop, deck builder, bulk testing, and AI coaching app.
 
+**v0.4.1** — Strict zone moves: library/GY/exile need queued effects; auto-draw + plain-English Stats unchanged.
+
 **v0.4.0** — Strict MTG draw/turn rules (auto-draw on draw step), plain-English Stats, pendingDraws hook, decked loss.
 
 Web-first PWA (React + TypeScript) for PC browsers and Android.

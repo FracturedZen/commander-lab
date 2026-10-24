@@ -31,8 +31,12 @@ export function TabletopPage() {
     selectedInstance,
     gameActive,
     mulliganOpen,
+    pendingActions,
+    moveNotice,
     busy,
     rulesStrict,
+    grantPendingAction,
+    getLegalDestinations,
     adjustLife,
     adjustCommanderDamage,
     shuffleLibrary,
@@ -190,9 +194,8 @@ export function TabletopPage() {
             className="w-full text-[10px] text-slate-500"
             title="In multiplayer Commander everyone draws on each of their turns, including the first. Drawing is automatic on the draw step — not a free button."
           >
-            Draws are automatic on the draw step (Commander: including turn 1). Use{' '}
-            <strong className="text-slate-400">End turn</strong> to rotate →
-            untap → draw → main.
+            Draws are automatic on the draw step. Zone moves need a legal action
+            or queued effect under strict rules — no free mill/tutor/top→hand.
           </p>
         </div>
       ) : (
@@ -436,39 +439,89 @@ export function TabletopPage() {
         </div>
       )}
 
-      {selectedInstance && gameActive && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-100">
-          <span>Move to:</span>
-          {MOVE_ZONES.filter((z) => z !== selectedInstance.zone).map((z) => (
-            <button
-              key={z}
-              type="button"
-              className="min-h-9 rounded bg-emerald-800/80 px-2 py-1 capitalize"
-              onClick={() =>
-                moveCard(selectedInstance.zone, z, selectedInstance.instanceId)
-              }
-            >
-              {z}
-            </button>
-          ))}
-          {selectedInstance.zone === 'battlefield' && (
-            <button
-              type="button"
-              className="min-h-9 rounded bg-amber-800/80 px-2 py-1"
-              onClick={() => toggleTap(selectedInstance.instanceId)}
-            >
-              Tap / Untap
-            </button>
-          )}
-          <button
-            type="button"
-            className="text-slate-400"
-            onClick={() => setSelectedInstance(null)}
-          >
-            Cancel
-          </button>
+      {moveNotice && gameActive && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
+          {moveNotice}
         </div>
       )}
+
+      {pendingActions.length > 0 && gameActive && (
+        <div className="rounded-lg border border-indigo-500/30 bg-indigo-950/40 px-3 py-2 text-[11px] text-indigo-100">
+          Active effects:{' '}
+          {pendingActions
+            .map((a) => `${a.label ?? a.type}×${a.count}`)
+            .join(' · ')}
+        </div>
+      )}
+
+      {selectedInstance && gameActive && (() => {
+        const card = player.zones[selectedInstance.zone].find(
+          (c) => c.instanceId === selectedInstance.instanceId,
+        )
+        const legal = getLegalDestinations(
+          selectedInstance.zone,
+          Boolean(card?.card.isCommander),
+        )
+        const legalZones = new Set(legal.map((l) => l.zone))
+        return (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-100">
+            <span>Move to:</span>
+            {MOVE_ZONES.filter((z) => z !== selectedInstance.zone).map((z) => {
+              const ok = !rulesStrict || legalZones.has(z)
+              return (
+                <button
+                  key={z}
+                  type="button"
+                  disabled={!ok}
+                  title={
+                    ok
+                      ? undefined
+                      : 'Needs a draw/mill/tutor/return effect'
+                  }
+                  className={[
+                    'min-h-9 rounded px-2 py-1 capitalize',
+                    ok
+                      ? 'bg-emerald-800/80'
+                      : 'cursor-not-allowed bg-slate-800/60 text-slate-500 line-through',
+                  ].join(' ')}
+                  onClick={() => {
+                    if (!ok) return
+                    moveCard(
+                      selectedInstance.zone,
+                      z,
+                      selectedInstance.instanceId,
+                    )
+                  }}
+                >
+                  {z}
+                </button>
+              )
+            })}
+            {selectedInstance.zone === 'battlefield' && (
+              <button
+                type="button"
+                className="min-h-9 rounded bg-amber-800/80 px-2 py-1"
+                onClick={() => toggleTap(selectedInstance.instanceId)}
+              >
+                Tap / Untap
+              </button>
+            )}
+            <button
+              type="button"
+              className="text-slate-400"
+              onClick={() => setSelectedInstance(null)}
+            >
+              Cancel
+            </button>
+            {rulesStrict && legal.length === 0 && (
+              <span className="w-full text-[10px] text-amber-200/80">
+                No legal destinations right now — needs a card effect (draw,
+                mill, tutor, discard, reanimate…).
+              </span>
+            )}
+          </div>
+        )
+      })()}
 
       <div
         className="relative overflow-hidden rounded-3xl border-4 border-amber-950/80 shadow-2xl shadow-black/50"
@@ -647,17 +700,73 @@ export function TabletopPage() {
                     ))}
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    {!rulesStrict && (
-                      <TinyButton onClick={() => moveTopLibraryTo('hand')}>
-                        Top → Hand
-                      </TinyButton>
-                    )}
-                    <TinyButton onClick={() => moveTopLibraryTo('battlefield')}>
-                      Top → BF
-                    </TinyButton>
-                    <TinyButton onClick={() => moveTopLibraryTo('graveyard')}>
-                      Top → GY
-                    </TinyButton>
+                    {(() => {
+                      const libLegal = new Set(
+                        getLegalDestinations('library').map((l) => l.zone),
+                      )
+                      const showHand =
+                        !rulesStrict || libLegal.has('hand')
+                      const showBf =
+                        !rulesStrict || libLegal.has('battlefield')
+                      const showGy =
+                        !rulesStrict || libLegal.has('graveyard')
+                      return (
+                        <>
+                          {showHand && (
+                            <TinyButton
+                              onClick={() => moveTopLibraryTo('hand')}
+                            >
+                              Top → Hand
+                            </TinyButton>
+                          )}
+                          {showBf && (
+                            <TinyButton
+                              onClick={() => moveTopLibraryTo('battlefield')}
+                            >
+                              Top → BF
+                            </TinyButton>
+                          )}
+                          {showGy && (
+                            <TinyButton
+                              onClick={() => moveTopLibraryTo('graveyard')}
+                            >
+                              Top → GY
+                            </TinyButton>
+                          )}
+                          {rulesStrict &&
+                            !showHand &&
+                            !showBf &&
+                            !showGy && (
+                              <p className="px-0.5 text-[9px] leading-snug text-emerald-100/45">
+                                Top-of-library moves need a draw/mill/tutor
+                                effect.
+                              </p>
+                            )}
+                          {!rulesStrict && (
+                            <>
+                              <TinyButton
+                                onClick={() =>
+                                  grantPendingAction('mill', 3, 'Mill 3')
+                                }
+                              >
+                                Grant mill 3
+                              </TinyButton>
+                              <TinyButton
+                                onClick={() =>
+                                  grantPendingAction(
+                                    'discard',
+                                    1,
+                                    'Discard 1',
+                                  )
+                                }
+                              >
+                                Grant discard
+                              </TinyButton>
+                            </>
+                          )}
+                        </>
+                      )
+                    })()}
                   </div>
                 </div>
               </ZonePanel>

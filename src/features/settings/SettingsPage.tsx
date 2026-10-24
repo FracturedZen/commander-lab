@@ -71,9 +71,9 @@ export function SettingsPage() {
               Strict rules (recommended)
             </span>
             <span className="mt-0.5 block text-xs text-slate-400">
-              Drawing happens automatically on your draw step — you can&apos;t spam
-              Draw. Commander multiplayer: you still draw on turn 1. Turn this off
-              only for debug free-draw testing.
+              Auto-draw on the draw step, and no free zone cheats: library → hand/GY,
+              GY → hand/BF, etc. need a queued effect. Turn off only for sandbox /
+              debug (free Top→Hand, Grant mill, etc.).
             </span>
           </span>
         </label>

@@ -1,5 +1,6 @@
 import type { CardInstance } from './card'
 import type { Phase } from '@/lib/rules/turnMachine'
+import type { PendingAction } from '@/lib/rules/moveLegality'
 
 export type ZoneName =
   | 'library'
@@ -9,7 +10,7 @@ export type ZoneName =
   | 'exile'
   | 'command'
 
-export type { Phase }
+export type { Phase, PendingAction }
 
 export interface PlayerState {
   id: string
@@ -53,6 +54,11 @@ export interface TableState {
    * Mid-game free mulligans are not allowed.
    */
   mulliganOpen: boolean
+  /**
+   * Queued card effects that temporarily allow zone moves (mill, tutor, etc.).
+   * Empty under normal play; filled by future card engine or debug grants.
+   */
+  pendingActions: PendingAction[]
 }
 
 /** Persisted table session (background stored separately as blob). */
@@ -64,6 +70,7 @@ export interface TableSessionRecord {
     hasBackground: boolean
     gameActive?: boolean
     mulliganOpen?: boolean
+    pendingActions?: PendingAction[]
   }
   log: string[]
 }

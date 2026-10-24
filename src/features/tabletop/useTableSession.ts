@@ -8,6 +8,12 @@ import {
   nextPhaseInOrder,
   type Phase,
 } from '@/lib/rules/turnMachine'
+import {
+  checkZoneMove,
+  legalDestinations,
+  type PendingAction,
+  type PendingActionType,
+} from '@/lib/rules/moveLegality'
 import { shuffle } from '@/lib/shuffle'
 import { BLOB_KEYS, deleteBlob, getBlob, putBlob } from '@/lib/storage/blobs'
 import { getDeck, listDecks } from '@/lib/storage/decks'
@@ -206,6 +212,8 @@ export function useTableSession() {
   const [turn, setTurn] = useState<TurnState>(() => initialTurn('p1', 'main1'))
   const [gameActive, setGameActive] = useState(false)
   const [mulliganOpen, setMulliganOpen] = useState(false)
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>([])
+  const [moveNotice, setMoveNotice] = useState<string | null>(null)
   const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null)
   const [log, setLog] = useState<string[]>([
     'Welcome. Install starter decks or sync cards, then Start a game.',
@@ -279,8 +287,9 @@ export function useTableSession() {
       seatCount,
       gameActive,
       mulliganOpen,
+      pendingActions,
     }),
-    [players, turn, backgroundUrl, seatCount, gameActive, mulliganOpen],
+    [players, turn, backgroundUrl, seatCount, gameActive, mulliganOpen, pendingActions],
   )
 
   const setSeatCount = useCallback(
@@ -567,6 +576,59 @@ export function useTableSession() {
     setTurn((t) => rotateToNextPlayer(t, true))
   }, [gameActive, mulliganOpen, rotateToNextPlayer])
 
+  const blockMove = useCallback((reason: string) => {
+    setMoveNotice(reason)
+    pushLog(reason)
+    window.setTimeout(() => setMoveNotice((cur) => (cur === reason ? null : cur)), 4000)
+  }, [pushLog])
+
+  const consumePendingAction = useCallback((actionId: string | undefined) => {
+    if (!actionId) return
+    setPendingActions((prev) =>
+      prev
+        .map((a) =>
+          a.id === actionId ? { ...a, count: a.count - 1 } : a,
+        )
+        .filter((a) => a.count > 0),
+    )
+  }, [])
+
+  const grantPendingAction = useCallback(
+    (type: PendingActionType, count: number, label?: string) => {
+      if (!gameActive) return
+      if (rulesStrict) {
+        blockMove(
+          'Granting free effects is debug-only. Turn off Strict rules in Settings.',
+        )
+        return
+      }
+      const action: PendingAction = {
+        id: crypto.randomUUID(),
+        type,
+        count,
+        playerId: player.id,
+        label: label ?? type,
+      }
+      setPendingActions((prev) => [...prev, action])
+      pushLog(`Debug: granted ${type} ×${count}.`)
+    },
+    [blockMove, gameActive, player.id, pushLog, rulesStrict],
+  )
+
+  const getLegalDestinations = useCallback(
+    (from: ZoneName, isCommander?: boolean) => {
+      return legalDestinations({
+        from,
+        rulesStrict,
+        phase: turn.phase,
+        playerId: player.id,
+        pendingActions,
+        isCommander,
+      })
+    },
+    [pendingActions, player.id, rulesStrict, turn.phase],
+  )
+
   const moveCard = useCallback(
     (
       fromZone: ZoneName,
@@ -575,17 +637,37 @@ export function useTableSession() {
       seatIndex = activeSeat,
     ) => {
       if (!gameActive) return
+      const seat = players[seatIndex]
+      if (!seat) return
+      const card = seat.zones[fromZone].find((c) => c.instanceId === instanceId)
+      if (!card) return
+
+      const check = checkZoneMove({
+        from: fromZone,
+        to: toZone,
+        rulesStrict,
+        phase: turn.phase,
+        playerId: seat.id,
+        pendingActions,
+        isCommander: Boolean(card.card.isCommander),
+        mulliganOpen,
+      })
+      if (!check.allowed) {
+        blockMove(check.reason ?? 'That move needs a card effect.')
+        return
+      }
+
       setPlayers((prev) =>
         prev.map((p, i) => {
           if (i !== seatIndex) return p
           const from = [...p.zones[fromZone]]
           const idx = from.findIndex((c) => c.instanceId === instanceId)
           if (idx < 0) return p
-          const [card] = from.splice(idx, 1)
-          if (!card) return p
+          const [movedCard] = from.splice(idx, 1)
+          if (!movedCard) return p
           const moved: CardInstance = {
-            ...card,
-            tapped: toZone === 'battlefield' ? false : card.tapped,
+            ...movedCard,
+            tapped: toZone === 'battlefield' ? false : movedCard.tapped,
           }
           return {
             ...p,
@@ -597,41 +679,77 @@ export function useTableSession() {
           }
         }),
       )
-      pushLog(`Moved → ${toZone}`)
+      consumePendingAction(check.consumeActionId)
+      setMoveNotice(null)
+      pushLog(`Moved ${fromZone} → ${toZone}`)
       setSelectedInstance(null)
     },
-    [activeSeat, gameActive, pushLog],
+    [
+      activeSeat,
+      blockMove,
+      consumePendingAction,
+      gameActive,
+      mulliganOpen,
+      pendingActions,
+      players,
+      pushLog,
+      rulesStrict,
+      turn.phase,
+    ],
   )
 
   const moveTopLibraryTo = useCallback(
     (zone: Exclude<ZoneName, 'library'>) => {
       if (!gameActive) return
-      // Top → Hand is a free draw; block under strict rules
-      if (rulesStrict && zone === 'hand') {
-        pushLog(
-          'Can’t freely put the top card into hand under strict rules — wait for the draw step (or a draw effect).',
-        )
+      const seat = players[activeSeat]
+      if (!seat) return
+      if (seat.zones.library.length === 0) {
+        blockMove('Library empty.')
+        return
+      }
+      const top = seat.zones.library[0]!
+      const check = checkZoneMove({
+        from: 'library',
+        to: zone,
+        rulesStrict,
+        phase: turn.phase,
+        playerId: seat.id,
+        pendingActions,
+        isCommander: Boolean(top.card.isCommander),
+      })
+      if (!check.allowed) {
+        blockMove(check.reason ?? 'Top-of-library moves need an effect.')
         return
       }
       updateActivePlayer((p) => {
-        if (p.zones.library.length === 0) {
-          pushLog('Library empty.')
-          return p
-        }
-        const [top, ...rest] = p.zones.library
-        if (!top) return p
+        if (p.zones.library.length === 0) return p
+        const [card, ...rest] = p.zones.library
+        if (!card) return p
         return {
           ...p,
           zones: {
             ...p.zones,
             library: rest,
-            [zone]: [...p.zones[zone], { ...top, tapped: false }],
+            [zone]: [...p.zones[zone], { ...card, tapped: false }],
           },
         }
       })
+      consumePendingAction(check.consumeActionId)
+      setMoveNotice(null)
       pushLog(`Top library → ${zone}`)
     },
-    [gameActive, pushLog, rulesStrict, updateActivePlayer],
+    [
+      activeSeat,
+      blockMove,
+      consumePendingAction,
+      gameActive,
+      pendingActions,
+      players,
+      pushLog,
+      rulesStrict,
+      turn.phase,
+      updateActivePlayer,
+    ],
   )
 
   const setBackground = useCallback(
@@ -769,6 +887,8 @@ export function useTableSession() {
         })
         setGameActive(true)
         setMulliganOpen(true)
+        setPendingActions([])
+        setMoveNotice(null)
         setAiLandsPlayed(0)
         setAiMana(0)
         setSelectedInstance(null)
@@ -793,6 +913,8 @@ export function useTableSession() {
   const endGame = useCallback(() => {
     setGameActive(false)
     setMulliganOpen(false)
+    setPendingActions([])
+    setMoveNotice(null)
     setPlayers(makeEmptySeats(seatCount))
     setTurn(initialTurn('p1', 'main1'))
     setActiveSeat(0)
@@ -816,6 +938,7 @@ export function useTableSession() {
         seatCount,
         gameActive,
         mulliganOpen,
+        pendingActions,
         hasBackground: Boolean(backgroundUrl),
       },
     }
@@ -827,6 +950,7 @@ export function useTableSession() {
     gameActive,
     log,
     mulliganOpen,
+    pendingActions,
     players,
     pushLog,
     seatCount,
@@ -848,6 +972,7 @@ export function useTableSession() {
       setSeatCountState(record.state.seatCount)
       setGameActive(record.state.gameActive ?? true)
       setMulliganOpen(record.state.mulliganOpen ?? false)
+      setPendingActions(record.state.pendingActions ?? [])
       setLog(record.log)
       setActiveSeat(
         Math.max(
@@ -921,9 +1046,13 @@ export function useTableSession() {
     selectedInstance,
     gameActive,
     mulliganOpen,
+    pendingActions,
+    moveNotice,
     busy,
     rulesStrict,
     setRulesStrict,
+    grantPendingAction,
+    getLegalDestinations,
     setActiveSeat,
     setSeatCount,
     setSelectedInstance,
