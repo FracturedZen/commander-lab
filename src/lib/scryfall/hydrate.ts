@@ -4,7 +4,8 @@
  */
 import { normalizeCardName, type CardRef } from '@/types/card'
 import { getDb, type StoredCardRow } from '@/lib/storage/db'
-import { getCardById, getCardByName } from './sync'
+import { getCardById, getCardByName, invalidateSearchCache } from './sync'
+import { mapScryfallToStored, type ScryfallBulkCard } from './mapCard'
 
 function stripNameNorm(row: StoredCardRow): CardRef {
   const { nameNorm: _n, ...rest } = row
@@ -18,6 +19,15 @@ function needsArt(card: CardRef): boolean {
 
 function needsOracle(card: CardRef): boolean {
   return !(card.oracleText && card.typeLine)
+}
+
+/**
+ * Do NOT synthesize CDN URLs from oracle_id / stored id — after sync the
+ * primary key is oracle_id, which is a UUID but not a printing id (404s).
+ * CDN synthesis happens only in mapCard from the printing UUID at sync time.
+ */
+export function attachCdnIfPossible(card: CardRef): CardRef {
+  return card
 }
 
 /** Merge synced row into a deck/table stub, preferring synced art. */
@@ -71,26 +81,86 @@ export async function getCardByOracleId(
   return getCardById(oracleId)
 }
 
+let namedQueue: Promise<void> = Promise.resolve()
+let lastNamedAt = 0
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+/**
+ * Live Scryfall named lookup (rate-limited). Caches into IndexedDB when possible.
+ * Prefer bulk re-sync; this is a safety net for stubs / old oracle-only rows.
+ */
+export async function fetchNamedCardLive(
+  exactName: string,
+): Promise<CardRef | undefined> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return undefined
+  const cleaned = exactName
+    .replace(/\s*\[[^\]]*]\s*$/, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim()
+  if (!cleaned) return undefined
+
+  const run = namedQueue.then(async () => {
+    const wait = Math.max(0, 110 - (Date.now() - lastNamedAt))
+    if (wait) await sleep(wait)
+    lastNamedAt = Date.now()
+    const url = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cleaned)}`
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) return undefined
+    const raw = (await res.json()) as ScryfallBulkCard
+    const stored = mapScryfallToStored(raw)
+    try {
+      const db = await getDb()
+      await db.put('cards', stored)
+      invalidateSearchCache()
+    } catch {
+      /* quota / private mode — still return the ref */
+    }
+    return stripNameNorm(stored)
+  })
+  namedQueue = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
 export async function hydrateCardRef(card: CardRef): Promise<CardRef> {
-  if (!needsArt(card) && !needsOracle(card)) return card
+  let next = attachCdnIfPossible(card)
+  if (!needsArt(next) && !needsOracle(next)) return next
   try {
-    const synced = await lookupSynced(card)
-    if (!synced) return card
-    return mergeHydrated(card, synced)
+    const synced = await lookupSynced(next)
+    if (synced) {
+      next = attachCdnIfPossible(mergeHydrated(next, synced))
+    }
   } catch {
-    return card
+    /* ignore */
   }
+  if (needsArt(next) && typeof navigator !== 'undefined' && navigator.onLine) {
+    try {
+      const live = await fetchNamedCardLive(next.name)
+      if (live) next = attachCdnIfPossible(mergeHydrated(next, live))
+    } catch {
+      /* ignore */
+    }
+  }
+  return next
 }
 
 /**
  * Batch-hydrate CardRefs. Builds one name/oracle map from IndexedDB for the
  * keys we need so a 99-card deck does not hammer the store.
+ * Live named API only for remaining art misses (capped + rate-limited).
  */
 export async function hydrateCardRefs(cards: CardRef[]): Promise<CardRef[]> {
   if (cards.length === 0) return cards
 
   const needLookup = cards.some((c) => needsArt(c) || needsOracle(c))
-  if (!needLookup) return cards
+  if (!needLookup) return cards.map(attachCdnIfPossible)
 
   const db = await getDb()
   const byOracle = new Map<string, CardRef>()
@@ -108,7 +178,6 @@ export async function hydrateCardRefs(cards: CardRef[]): Promise<CardRef[]> {
     nameKeys.add(normalizeCardName(c.name))
   }
 
-  // Prefer targeted index reads; fall back to a single full scan if many misses
   for (const oid of oracleKeys) {
     try {
       const rows = await db.getAllFromIndex('cards', 'by-oracle', oid)
@@ -146,15 +215,12 @@ export async function hydrateCardRefs(cards: CardRef[]): Promise<CardRef[]> {
     }
   }
 
-  // Name fallback for stubs — one scan of by-name-norm for remaining
   const missingNames = [...nameKeys].filter((n) => !byNameNorm.has(n))
   if (missingNames.length > 0) {
     const missingSet = new Set(missingNames)
     try {
-      // Bound: if few names left, use getCardByName; if many, scan once
       if (missingSet.size <= 8) {
         for (const n of missingSet) {
-          // Re-resolve via name helper (uses search cache after warm)
           const sample = cards.find(
             (c) => normalizeCardName(c.name) === n,
           )
@@ -189,12 +255,35 @@ export async function hydrateCardRefs(cards: CardRef[]): Promise<CardRef[]> {
     }
   }
 
-  return cards.map((card) => {
-    if (!needsArt(card) && !needsOracle(card)) return card
+  let out = cards.map((card) => {
+    let next = attachCdnIfPossible(card)
+    if (!needsArt(next) && !needsOracle(next)) return next
     const synced =
       (card.oracleId ? byOracle.get(card.oracleId) : undefined) ??
       byId.get(card.id) ??
       byNameNorm.get(normalizeCardName(card.name))
-    return synced ? mergeHydrated(card, synced) : card
+    return synced
+      ? attachCdnIfPossible(mergeHydrated(next, synced))
+      : next
   })
+
+  // Live named fallback for art still missing — cap to avoid hammering Scryfall.
+  const LIVE_CAP = 12
+  if (typeof navigator === 'undefined' || !navigator.onLine) return out
+
+  const needLive = out
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => needsArt(c))
+    .slice(0, LIVE_CAP)
+
+  for (const { c, i } of needLive) {
+    try {
+      const live = await fetchNamedCardLive(c.name)
+      if (live) out[i] = attachCdnIfPossible(mergeHydrated(c, live))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return out
 }

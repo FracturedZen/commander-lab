@@ -20,6 +20,7 @@ export type ScryfallBulkCard = {
   released_at?: string
   image_uris?: { small?: string; normal?: string; large?: string }
   card_faces?: Array<{
+    id?: string
     mana_cost?: string
     type_line?: string
     oracle_text?: string
@@ -33,25 +34,64 @@ export type ScryfallBulkCard = {
   layout?: string
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Scryfall CDN when bulk omits image_uris but we have a printing UUID. */
+export function scryfallCdnUrls(
+  printingId: string,
+  face: 'front' | 'back' = 'front',
+): { small: string; normal: string; large: string } | undefined {
+  if (!UUID_RE.test(printingId)) return undefined
+  const a = printingId[0]
+  const b = printingId[1]
+  const base = `https://cards.scryfall.io`
+  return {
+    small: `${base}/small/${face}/${a}/${b}/${printingId}.jpg`,
+    normal: `${base}/normal/${face}/${a}/${b}/${printingId}.jpg`,
+    large: `${base}/large/${face}/${a}/${b}/${printingId}.jpg`,
+  }
+}
+
+function printingIdForArt(raw: ScryfallBulkCard): string | undefined {
+  const face0 = raw.card_faces?.[0]
+  if (face0?.id && UUID_RE.test(face0.id)) return face0.id
+  if (raw.id && UUID_RE.test(raw.id)) return raw.id
+  return undefined
+}
+
 function faceImages(raw: ScryfallBulkCard) {
   const face0 = raw.card_faces?.[0]
-  return {
-    imageSmall:
-      raw.image_uris?.small ?? face0?.image_uris?.small ?? undefined,
-    imageNormal:
-      raw.image_uris?.normal ??
-      face0?.image_uris?.normal ??
-      raw.image_uris?.large ??
-      face0?.image_uris?.large ??
-      undefined,
-    imageLarge:
-      raw.image_uris?.large ?? face0?.image_uris?.large ?? undefined,
+  let imageSmall =
+    raw.image_uris?.small ?? face0?.image_uris?.small ?? undefined
+  let imageNormal =
+    raw.image_uris?.normal ??
+    face0?.image_uris?.normal ??
+    raw.image_uris?.large ??
+    face0?.image_uris?.large ??
+    undefined
+  let imageLarge =
+    raw.image_uris?.large ?? face0?.image_uris?.large ?? undefined
+
+  if (!imageSmall && !imageNormal && !imageLarge) {
+    const pid = printingIdForArt(raw)
+    if (pid) {
+      const cdn = scryfallCdnUrls(pid, 'front')
+      if (cdn) {
+        imageSmall = cdn.small
+        imageNormal = cdn.normal
+        imageLarge = cdn.large
+      }
+    }
   }
+
+  return { imageSmall, imageNormal, imageLarge }
 }
 
 /**
  * One IndexedDB row per oracle card. Prefer oracle_id as the primary key so
  * reprint arts never duplicate in search or table resolution.
+ * Image URLs come from the chosen printing (default_cards / unique_artwork).
  */
 export function mapScryfallToStored(raw: ScryfallBulkCard): StoredCardRow {
   const face0 = raw.card_faces?.[0]

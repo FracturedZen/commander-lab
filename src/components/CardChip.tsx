@@ -1,5 +1,6 @@
-import { useRef, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import type { CardRef } from '@/types/card'
+import { fetchNamedCardLive } from '@/lib/scryfall/hydrate'
 
 export type CardChipSize = 'tiny' | 'hand' | 'board' | 'boardLg' | 'command' | 'land'
 
@@ -35,9 +36,15 @@ function online(): boolean {
   return typeof navigator === 'undefined' || navigator.onLine
 }
 
-function artUrl(card: CardRef, preferSmall: boolean): string | undefined {
-  if (preferSmall) return card.imageSmall ?? card.imageNormal ?? card.imageLarge
-  return card.imageNormal ?? card.imageLarge ?? card.imageSmall
+function artCandidates(card: CardRef, preferSmall: boolean): string[] {
+  const ordered = preferSmall
+    ? [card.imageSmall, card.imageNormal, card.imageLarge]
+    : [card.imageNormal, card.imageLarge, card.imageSmall]
+  const out: string[] = []
+  for (const u of ordered) {
+    if (u && !out.includes(u)) out.push(u)
+  }
+  return out
 }
 
 function powerToughness(card: CardRef): string | null {
@@ -64,9 +71,46 @@ export function CardChip({
   const q = quantity ?? card.quantity
   const holdTimer = useRef<number | null>(null)
   const preferSmall = size === 'tiny' || size === 'land' || size === 'hand'
+  const namedTried = useRef(false)
+  const [liveCard, setLiveCard] = useState<CardRef | null>(null)
+  const [srcIndex, setSrcIndex] = useState(0)
+  const [imgFailed, setImgFailed] = useState(false)
+
+  const effective = liveCard ?? card
+  const candidates =
+    showImage && !faceDown && online()
+      ? artCandidates(effective, preferSmall)
+      : []
   const src =
-    showImage && !faceDown && online() ? artUrl(card, preferSmall) : undefined
-  const pt = !faceDown ? powerToughness(card) : null
+    !imgFailed && srcIndex < candidates.length ? candidates[srcIndex] : undefined
+
+  useEffect(() => {
+    setLiveCard(null)
+    setSrcIndex(0)
+    setImgFailed(false)
+    namedTried.current = false
+  }, [card.id, card.name, card.imageNormal, card.imageSmall, card.imageLarge])
+
+  useEffect(() => {
+    if (!showImage || faceDown || !online()) return
+    if (candidates.length > 0) return
+    if (namedTried.current) return
+    namedTried.current = true
+    let cancelled = false
+    void fetchNamedCardLive(card.name).then((live) => {
+      if (cancelled || !live) return
+      if (live.imageNormal || live.imageLarge || live.imageSmall) {
+        setLiveCard(live)
+        setSrcIndex(0)
+        setImgFailed(false)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [card.name, candidates.length, faceDown, showImage])
+
+  const pt = !faceDown ? powerToughness(effective) : null
   const showNameStrip =
     !faceDown && !hideName && size !== 'land' && size !== 'tiny'
 
@@ -122,16 +166,16 @@ export function CardChip({
       title={
         faceDown
           ? 'Facedown card'
-          : `${card.name}${tapped ? ' (tapped)' : ''}${
+          : `${effective.name}${tapped ? ' (tapped)' : ''}${
               highlighted ? ' — action available' : ''
             }`
       }
       aria-label={
         highlighted
-          ? `${card.name}, action available`
+          ? `${effective.name}, action available`
           : faceDown
             ? 'Facedown card'
-            : card.name
+            : effective.name
       }
     >
       {faceDown ? (
@@ -147,24 +191,28 @@ export function CardChip({
             loading="lazy"
             decoding="async"
             draggable={false}
-            onError={(e) => {
-              ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+            onError={() => {
+              if (srcIndex + 1 < candidates.length) {
+                setSrcIndex((i) => i + 1)
+              } else {
+                setImgFailed(true)
+              }
             }}
           />
           {showNameStrip && (
             <span className="relative z-10 line-clamp-1 w-full bg-gradient-to-b from-black/75 to-transparent px-0.5 pb-2 pt-0.5 text-[7px] leading-tight text-white/95 sm:text-[8px]">
-              {card.name}
+              {effective.name}
             </span>
           )}
         </>
       ) : (
         <>
           <span className="line-clamp-4 px-0.5 pt-1 text-[8px] leading-tight text-slate-100">
-            {card.name}
+            {effective.name}
           </span>
-          {card.manaCost && (
+          {effective.manaCost && (
             <span className="px-0.5 pb-0.5 text-[7px] text-amber-200/80">
-              {card.manaCost}
+              {effective.manaCost}
             </span>
           )}
         </>

@@ -1,6 +1,6 @@
 /**
  * Card model used across table, decks, and local Scryfall cache.
- * Synced cards map from Scryfall oracle_cards (trimmed fields).
+ * Synced cards map from Scryfall default_cards (trimmed; one art per oracle_id).
  */
 export interface CardRef {
   /** Scryfall `id` (UUID) or local placeholder id. */

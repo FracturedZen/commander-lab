@@ -2,6 +2,8 @@
 
 Offline-first **Commander (EDH)** digital tabletop, deck builder, bulk testing, and AI coaching app.
 
+**v0.5.3** — Card art fix: sync `default_cards` (has `image_uris`), CDN synthesize + named API fallback; **one re-sync required**.
+
 **v0.5.2** — Arena Pass + auto-advance phases, mini phase ladder with stops, art-first BF with P/T, stacked lands, cleaner phone HUD.
 
 **v0.5.1** — Arena-inspired table UX (cyan activatable glow, phase rail, hand fan, card detail, stack stub) + full card art (one printing per `oracle_id`).
@@ -29,7 +31,7 @@ npm run build -- --base=/commander-lab/
 | Routing | `react-router-dom` |
 | Offline / PWA | `vite-plugin-pwa` |
 | Local DB | IndexedDB via `idb` |
-| Card data | Scryfall `oracle_cards` bulk → IndexedDB |
+| Card data | Scryfall `default_cards` bulk (art URLs) → IndexedDB |
 | AI | OpenRouter (API key stored locally) |
 
 ## Quick start
@@ -57,7 +59,7 @@ Zone moves always go through `checkZoneMove` — sandbox only shows debug **Gran
 
 
 ### Cards (Scryfall sync)
-1. Open **Cards** → **Sync cards** (needs network once; ~25&nbsp;MB gzipped JSONL).
+1. Open **Cards** → **Sync cards** (needs network once; `default_cards` gzipped JSONL with art). After upgrading to v0.5.3, **re-sync once**.
 2. App decompresses in-browser and indexes trimmed fields into IndexedDB (chunked writes).
 3. Progress: catalog → download → decompress/index; failures show the real error string.
 4. Local fuzzy name search works offline afterward.

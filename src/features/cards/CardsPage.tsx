@@ -40,7 +40,7 @@ export function CardsPage() {
         await installSampleDecks()
         setProgress({
           phase: 'done',
-          message: `Synced ${next.cardCount.toLocaleString()} cards · starter decks refreshed with art.`,
+          message: `Art included — synced ${next.cardCount.toLocaleString()} cards (${next.bulkType}) · starter decks refreshed. Re-sync was required after bulk-source switch.`,
           fraction: 1,
         })
       } catch {
@@ -74,8 +74,9 @@ export function CardsPage() {
         <h1 className="text-xl font-semibold text-white">Card database</h1>
         <p className="mt-1 text-sm text-slate-400">
           Offline-first: tap <strong className="text-slate-200">Sync cards</strong> once
-          while online. We download Scryfall <code className="text-emerald-300">oracle_cards</code>{' '}
-          as gzipped JSONL (~25&nbsp;MB compressed), decompress in-browser, and index
+          while online. We download Scryfall{' '}
+          <code className="text-emerald-300">default_cards</code> (includes art URLs; one
+          printing per oracle id) as gzipped JSONL, decompress in-browser, and index
           trimmed fields into IndexedDB. Search then works offline. Art uses Scryfall CDN
           when online; offline falls back to name/text. Starter decks on the table work
           even before sync.
@@ -85,6 +86,18 @@ export function CardsPage() {
           catalog → download → decompress/index. Errors surface in red below the button.
         </p>
       </div>
+
+
+      {(!meta || meta.bulkType !== 'default_cards') && !busy && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-3 text-sm text-amber-100">
+          <strong className="text-amber-200">Art included — re-sync required</strong>
+          <span className="mt-1 block text-amber-100/80">
+            Card art now comes from Scryfall <code className="text-amber-200">default_cards</code>.
+            Tap <strong>Sync cards</strong> once (switched bulk source). Old oracle-only caches
+            have no image URLs.
+          </span>
+        </div>
+      )}
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -158,9 +171,10 @@ export function CardsPage() {
         <CardSearch onSelect={setPreview} placeholder="e.g. Sol Ring, Cyclonic Rift…" />
         {preview && (
           <div className="mt-4 flex gap-3 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
-            {preview.imageNormal && typeof navigator !== 'undefined' && navigator.onLine ? (
+            {(preview.imageNormal || preview.imageLarge || preview.imageSmall) &&
+            (typeof navigator === 'undefined' || navigator.onLine) ? (
               <img
-                src={preview.imageNormal}
+                src={preview.imageNormal ?? preview.imageLarge ?? preview.imageSmall}
                 alt={preview.name}
                 className="h-40 w-28 rounded object-cover"
               />

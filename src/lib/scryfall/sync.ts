@@ -25,7 +25,11 @@ export type CardDbMeta = {
 }
 
 const BULK_API = 'https://api.scryfall.com/bulk-data'
-const PREFERRED_BULK = 'oracle_cards'
+/**
+ * default_cards includes image_uris (oracle_cards intentionally does not).
+ * Fallbacks: unique_artwork → oracle_cards (CDN synthesize / live named API).
+ */
+const BULK_PREFERENCE = ['default_cards', 'unique_artwork', 'oracle_cards'] as const
 /** Small batches for mobile Safari IndexedDB quota / transaction limits. */
 const WRITE_BATCH = 80
 
@@ -53,9 +57,9 @@ export async function getCardCount(): Promise<number> {
 }
 
 /**
- * Download Scryfall oracle_cards bulk (gzipped JSONL), strip fields, write IndexedDB.
- * Scryfall (2026+) no longer ships uncompressed `download_uri` JSON arrays —
- * only `jsonl_download_uri` (.jsonl.gz).
+ * Download Scryfall default_cards bulk (gzipped JSONL) with image_uris, collapse
+ * to one printing per oracle_id, strip fields, write IndexedDB.
+ * Scryfall (2026+) ships `jsonl_download_uri` (.jsonl.gz).
  */
 export async function syncScryfallCards(
   onProgress?: (p: SyncProgress) => void,
@@ -89,11 +93,13 @@ export async function syncScryfallCards(
       throw new Error('Scryfall bulk-data response missing data[]')
     }
 
-    const item =
-      listJson.data.find((d) => d.type === PREFERRED_BULK) ??
-      listJson.data.find((d) => d.type === 'default_cards')
+    const item = BULK_PREFERENCE.map((t) =>
+      listJson.data.find((d) => d.type === t),
+    ).find(Boolean)
     if (!item) {
-      throw new Error('No oracle_cards / default_cards bulk entry found')
+      throw new Error(
+        `No bulk entry found among: ${BULK_PREFERENCE.join(', ')}`,
+      )
     }
 
     const downloadUri = item.jsonl_download_uri ?? item.download_uri
@@ -230,7 +236,7 @@ export async function syncScryfallCards(
 
     report({
       phase: 'done',
-      message: `Synced ${written.toLocaleString()} cards. You can play offline now.`,
+      message: `Synced ${written.toLocaleString()} cards with art (${item.type}). Re-sync required after bulk-source switch — starter decks refreshed next.`,
       fraction: 1,
       cardsWritten: written,
       totalCards: written,
@@ -287,8 +293,8 @@ async function indexJsonlStream(
   let batch: ScryfallBulkCard[] = []
   let written = 0
   let cleared = false
-  // oracle_cards is typically ~30–40k rows
-  const approxTotal = 35000
+  // default_cards ~90k+ printings before oracle dedupe; unique ~40–50k
+  const approxTotal = 45000
 
   const oracleScores = new Map<string, number>()
 

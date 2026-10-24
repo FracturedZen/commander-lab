@@ -41,7 +41,7 @@ export interface CommanderLabDB extends DBSchema {
 }
 
 const DB_NAME = 'commander-lab'
-const DB_VERSION = 3
+const DB_VERSION = 4
 
 let dbPromise: Promise<IDBPDatabase<CommanderLabDB>> | null = null
 
@@ -83,6 +83,20 @@ export function getDb(): Promise<IDBPDatabase<CommanderLabDB>> {
           cards.createIndex('by-name', 'name')
           cards.createIndex('by-oracle', 'oracleId')
           cards.createIndex('by-name-norm', 'nameNorm')
+          if (db.objectStoreNames.contains('cardMeta')) {
+            db.deleteObjectStore('cardMeta')
+            db.createObjectStore('cardMeta', { keyPath: 'key' })
+          }
+        }
+        if (oldVersion < 4) {
+          // Switch bulk source to default_cards (image_uris) — clear oracle-only cache.
+          if (db.objectStoreNames.contains('cards')) {
+            db.deleteObjectStore('cards')
+            const cards = db.createObjectStore('cards', { keyPath: 'id' })
+            cards.createIndex('by-name', 'name')
+            cards.createIndex('by-oracle', 'oracleId')
+            cards.createIndex('by-name-norm', 'nameNorm')
+          }
           if (db.objectStoreNames.contains('cardMeta')) {
             db.deleteObjectStore('cardMeta')
             db.createObjectStore('cardMeta', { keyPath: 'key' })
