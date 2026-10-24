@@ -22,6 +22,8 @@ export const SETTINGS_KEYS = {
   defaultSeatCount: 'table.seatCount',
   /** When true (default), free Draw is disabled; auto-draw on draw step only. */
   rulesStrict: 'rules.strict',
+  /** 'phase' | 'legacy' — Phase WASM is default when available. */
+  engineMode: 'engine.mode',
 } as const
 
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini'

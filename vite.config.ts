@@ -46,7 +46,34 @@ export default defineConfig({
             handler: 'NetworkOnly',
             method: 'GET',
           },
+          {
+            // Phase WASM binary (~39 MB) — cache after first boot for offline reuse
+            urlPattern: ({ url }) =>
+              url.hostname === 'data.phase-rs.dev' &&
+              url.pathname.includes('/wasm/'),
+            handler: 'CacheFirst',
+            method: 'GET',
+            options: {
+              cacheName: 'phase-wasm',
+              expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // Phase card-data meta only (tiny); full JSON stays in IndexedDB via adapter
+            urlPattern: ({ url }) =>
+              url.hostname === 'data.phase-rs.dev' &&
+              url.pathname.endsWith('card-data-meta.json'),
+            handler: 'StaleWhileRevalidate',
+            method: 'GET',
+            options: {
+              cacheName: 'phase-meta',
+              expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 7 },
+            },
+          },
         ],
+        // Allow large WASM in precache patterns if ever vendored under public/
+        maximumFileSizeToCacheInBytes: 50 * 1024 * 1024,
       },
       devOptions: {
         enabled: false,

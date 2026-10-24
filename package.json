@@ -1,14 +1,15 @@
 {
   "name": "commander-lab",
   "private": true,
-  "version": "0.5.4",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test:rules": "npx --yes tsx scripts/moveLegality.selftest.ts"
+    "test:rules": "npx --yes tsx scripts/moveLegality.selftest.ts",
+    "test:goldfish": "echo \"Run Headless goldfish from /engine in the browser\""
   },
   "dependencies": {
     "idb": "^8.0.4",

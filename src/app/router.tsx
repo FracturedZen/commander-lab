@@ -6,6 +6,7 @@ import { BuilderPage } from '@/features/builder/BuilderPage'
 import { CardsPage } from '@/features/cards/CardsPage'
 import { StatsPage } from '@/features/stats/StatsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
+import { EnginePlayPage } from '@/features/engine/EnginePlayPage'
 
 /** Vite `base` ends with `/` (e.g. `/commander-lab/` or `/`). */
 const basename = import.meta.env.BASE_URL.replace(/\/$/, '') || undefined
@@ -20,6 +21,7 @@ export function AppRouter() {
           <Route path="builder" element={<BuilderPage />} />
           <Route path="cards" element={<CardsPage />} />
           <Route path="stats" element={<StatsPage />} />
+          <Route path="engine" element={<EnginePlayPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

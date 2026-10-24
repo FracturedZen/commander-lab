@@ -41,6 +41,9 @@ export function AppHeader() {
           <NavLink to="/stats" className={linkClass}>
             Stats
           </NavLink>
+          <NavLink to="/engine" className={linkClass}>
+            Engine
+          </NavLink>
           <NavLink to="/settings" className={linkClass}>
             Settings
           </NavLink>
