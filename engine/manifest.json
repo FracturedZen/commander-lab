@@ -1,0 +1,10 @@
+{
+  "source": "phase-rs CDN staging (pinned to preview client)",
+  "updated": "2026-10-24",
+  "wasmUrl": "https://data.phase-rs.dev/staging/wasm/engine_wasm_bg-fa2a9156e8e62943.wasm",
+  "cardDataUrl": "https://data.phase-rs.dev/staging/card-data-b238f3af63cb27cf.json",
+  "cardDataHash": "b238f3af63cb27cf",
+  "cardDataMetaUrl": "https://data.phase-rs.dev/staging/card-data-meta.json",
+  "note": "Do not use card-data-meta.json blindly \u2014 it can advance ahead of the WASM. Glue JS vendored from preview.phase-rs.dev; WASM+card-data loaded from CDN at runtime.",
+  "previewCommitHint": "matches preview.phase-rs.dev engine_wasm-CnI-QKzB.js"
+}
