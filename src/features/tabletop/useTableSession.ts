@@ -6,8 +6,11 @@ import { expandDeckCards } from '@/lib/deck/legality'
 import { hydrateCardRefs } from '@/lib/scryfall/hydrate'
 import {
   DEFAULT_TURN_DRAWS,
+  computePassAdvance,
+  enterCombatPhase,
   nextPhaseInOrder,
   type Phase,
+  type RailSegmentId,
 } from '@/lib/rules/turnMachine'
 import {
   cardCanActivate,
@@ -130,7 +133,14 @@ function initialTurn(playerId: string, phase: Phase = 'untap'): TurnState {
     activePlayerId: playerId,
     phase,
     lastAutoNote: null,
+    phaseStops: [],
+    combatEntered: false,
+    attackersDeclared: false,
   }
+}
+
+function stopsSet(turn: TurnState): Set<RailSegmentId> {
+  return new Set(turn.phaseStops ?? [])
 }
 
 function dealHand(p: PlayerState, n = 7): PlayerState {
@@ -525,6 +535,9 @@ export function useTableSession() {
         activePlayerId: nextId,
         phase: (jumpToMain1 ? 'main1' : 'untap') as Phase,
         lastAutoNote: jumpToMain1 ? 'Drew for turn' : null,
+        phaseStops: fromTurn.phaseStops ?? [],
+        combatEntered: false,
+        attackersDeclared: false,
       } satisfies TurnState
     },
     [players, pushLog, resolveDraws],
@@ -577,6 +590,125 @@ export function useTableSession() {
     if (mulliganOpen) setMulliganOpen(false)
     setTurn((t) => rotateToNextPlayer(t, true))
   }, [gameActive, mulliganOpen, rotateToNextPlayer])
+
+  /**
+   * Arena Pass: auto-walk to the next decision point (skip empty beginning,
+   * skip combat when no stop / no attackers, End turn from Main 2).
+   */
+  const passPriority = useCallback(() => {
+    if (!gameActive) return
+    if (mulliganOpen) setMulliganOpen(false)
+
+    setTurn((t) => {
+      const result = computePassAdvance({
+        phase: t.phase,
+        stops: stopsSet(t),
+        combatEntered: Boolean(t.combatEntered),
+        attackersDeclared: Boolean(t.attackersDeclared),
+      })
+
+      if (result.kind === 'end_turn') {
+        pushLog('Pass — end turn')
+        return rotateToNextPlayer(t, true)
+      }
+
+      const seatIdx = players.findIndex((p) => p.id === t.activePlayerId)
+      const idx = seatIdx >= 0 ? seatIdx : activeSeat
+      let phase = result.phase
+      let note = result.note ?? null
+      let combatEntered = Boolean(t.combatEntered)
+      let attackersDeclared = Boolean(t.attackersDeclared)
+
+      // If somehow asked to land in beginning, snap to main1 + resolve draw
+      if (phase === 'untap' || phase === 'upkeep' || phase === 'draw') {
+        setPlayers((prev) => {
+          const updated = prev.map((p, i) => {
+            if (i !== idx) return p
+            let next = beginTurnPlayer(p)
+            return next
+          })
+          const pending = updated[idx]?.pendingDraws ?? DEFAULT_TURN_DRAWS
+          queueMicrotask(() => {
+            resolveDraws(idx, pending, 'Draw step')
+          })
+          return updated
+        })
+        phase = 'main1'
+        note = 'to Main'
+      }
+
+      if (phase.startsWith('combat')) {
+        combatEntered = true
+      }
+      if (phase === 'main2' || phase === 'end' || phase === 'main1') {
+        // Leaving combat clears attackers stub for next cycle
+        if (!phase.startsWith('combat')) {
+          attackersDeclared = false
+        }
+      }
+
+      pushLog(`Pass → ${phase}${note ? ` (${note})` : ''}`)
+      return {
+        ...t,
+        phase,
+        lastAutoNote: note,
+        combatEntered,
+        attackersDeclared,
+      }
+    })
+  }, [
+    activeSeat,
+    gameActive,
+    mulliganOpen,
+    players,
+    pushLog,
+    resolveDraws,
+    rotateToNextPlayer,
+  ])
+
+  const togglePhaseStop = useCallback((id: RailSegmentId) => {
+    setTurn((t) => {
+      const cur = new Set(t.phaseStops ?? [])
+      if (cur.has(id)) cur.delete(id)
+      else cur.add(id)
+      const next = Array.from(cur)
+      pushLog(
+        cur.has(id)
+          ? `Phase stop on ${id}`
+          : `Phase stop cleared: ${id}`,
+      )
+      return { ...t, phaseStops: next }
+    })
+  }, [pushLog])
+
+  /** Enter combat from Main 1 (rail tap). */
+  const enterCombat = useCallback(() => {
+    if (!gameActive) return
+    setTurn((t) => {
+      if (t.phase !== 'main1' && t.phase !== 'combat_begin') {
+        pushLog('Enter combat from Main 1.')
+        return t
+      }
+      const phase = enterCombatPhase()
+      pushLog('Entered combat — declare attackers (Pass skips if none).')
+      return {
+        ...t,
+        phase,
+        combatEntered: true,
+        attackersDeclared: false,
+        lastAutoNote: 'to Combat',
+      }
+    })
+  }, [gameActive, pushLog])
+
+  /** Mark attackers declared (stub — tap creatures into combat later). */
+  const declareAttackers = useCallback(() => {
+    setTurn((t) => {
+      if (!t.phase.startsWith('combat')) return t
+      pushLog('Attackers declared.')
+      return { ...t, attackersDeclared: true, lastAutoNote: 'Attackers' }
+    })
+  }, [pushLog])
 
   const blockMove = useCallback((reason: string) => {
     setMoveNotice(reason)
@@ -898,6 +1030,9 @@ export function useTableSession() {
             : drawn > 0
               ? `Drew ${drawn}`
               : null,
+          phaseStops: [],
+          combatEntered: false,
+          attackersDeclared: false,
         })
         setGameActive(true)
         setMulliganOpen(true)
@@ -982,6 +1117,9 @@ export function useTableSession() {
       setTurn({
         ...record.state.turn,
         phase: (record.state.turn.phase as Phase) || 'main1',
+        phaseStops: record.state.turn.phaseStops ?? [],
+        combatEntered: record.state.turn.combatEntered ?? false,
+        attackersDeclared: record.state.turn.attackersDeclared ?? false,
       })
       setSeatCountState(record.state.seatCount)
       setGameActive(record.state.gameActive ?? true)
@@ -1112,6 +1250,10 @@ export function useTableSession() {
     keepHand,
     queueExtraDraws,
     nextPhase,
+    passPriority,
+    togglePhaseStop,
+    enterCombat,
+    declareAttackers,
     endTurn,
     moveTopLibraryTo,
     moveCard,

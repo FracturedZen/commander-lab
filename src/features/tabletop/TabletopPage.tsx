@@ -1,14 +1,15 @@
-import { useEffect, useState, type DragEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { CardChip } from '@/components/CardChip'
 import { CardDetailOverlay } from '@/components/CardDetailOverlay'
 import { PhaseRail } from '@/components/PhaseRail'
 import { StackStub } from '@/components/StackStub'
-import { ZonePanel } from '@/components/ZonePanel'
+import { isLand } from '@/types/card'
 import { BackgroundControl } from './BackgroundControl'
 import { useTableSession } from './useTableSession'
 import { SAMPLE_DECK_DEFS } from '@/lib/sample-decks/install'
-import type { CardRef } from '@/types/card'
+import type { CardInstance, CardRef } from '@/types/card'
+import type { RailSegmentId } from '@/lib/rules/turnMachine'
 import type { ZoneName } from '@/types/game'
 
 const MOVE_ZONES: ZoneName[] = [
@@ -19,6 +20,36 @@ const MOVE_ZONES: ZoneName[] = [
   'command',
   'library',
 ]
+
+type LandStack = {
+  key: string
+  name: string
+  cards: CardInstance[]
+  untapped: number
+  tapped: number
+}
+
+function stackLands(cards: CardInstance[]): LandStack[] {
+  const map = new Map<string, LandStack>()
+  for (const c of cards) {
+    const key = c.card.oracleId ?? c.card.name
+    let stack = map.get(key)
+    if (!stack) {
+      stack = {
+        key,
+        name: c.card.name,
+        cards: [],
+        untapped: 0,
+        tapped: 0,
+      }
+      map.set(key, stack)
+    }
+    stack.cards.push(c)
+    if (c.tapped) stack.tapped++
+    else stack.untapped++
+  }
+  return Array.from(map.values())
+}
 
 export function TabletopPage() {
   const s = useTableSession()
@@ -48,6 +79,9 @@ export function TabletopPage() {
     mulligan,
     keepHand,
     nextPhase,
+    passPriority,
+    togglePhaseStop,
+    enterCombat,
     endTurn,
     moveTopLibraryTo,
     moveCard,
@@ -68,6 +102,7 @@ export function TabletopPage() {
   const [dragOverZone, setDragOverZone] = useState<ZoneName | null>(null)
   const [setupSeats, setSetupSeats] = useState(1)
   const [setupDecks, setSetupDecks] = useState<(string | null)[]>([null])
+  const [menuOpen, setMenuOpen] = useState(false)
   const [inspect, setInspect] = useState<{
     card: CardRef
     zone: ZoneName
@@ -80,6 +115,22 @@ export function TabletopPage() {
       return next
     })
   }, [setupSeats])
+
+  const stops = useMemo(
+    () => new Set<RailSegmentId>(turn.phaseStops ?? []),
+    [turn.phaseStops],
+  )
+
+  const { creatures, lands, landStacks } = useMemo(() => {
+    const bf = player.zones.battlefield
+    const landCards = bf.filter((c) => isLand(c.card))
+    const nonLand = bf.filter((c) => !isLand(c.card))
+    return {
+      creatures: nonLand,
+      lands: landCards,
+      landStacks: stackLands(landCards),
+    }
+  }, [player.zones.battlefield])
 
   function onDropTo(zone: ZoneName) {
     setDragOverZone(null)
@@ -116,72 +167,33 @@ export function TabletopPage() {
     }
   }
 
+  function openInspect(zone: ZoneName, c: CardInstance) {
+    setInspect({ card: c.card, zone, instanceId: c.instanceId })
+  }
+
+  function selectForMove(zone: ZoneName, c: CardInstance) {
+    setSelectedInstance({
+      playerId: player.id,
+      zone,
+      instanceId: c.instanceId,
+    })
+  }
+
   const activeName =
     players.find((p) => p.id === turn.activePlayerId)?.name ?? 'Player'
+  const yourTurn = player.id === turn.activePlayerId
+  const opponents = players.filter((_, i) => i !== activeSeat)
+
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-3 px-2 py-3 sm:px-4">
-      {gameActive ? (
-        <div className="sticky top-0 z-20 -mx-2 flex flex-col gap-2 border-b border-sky-500/25 bg-slate-950/95 px-2 py-2 backdrop-blur sm:mx-0 sm:rounded-xl sm:border sm:px-3">
-          <PhaseRail
-            phase={turn.phase}
-            turnNumber={turn.turnNumber}
-            activeName={activeName}
-            yourTurn={player.id === turn.activePlayerId}
-            lastAutoNote={turn.lastAutoNote}
-            onNextPhase={nextPhase}
-            onEndTurn={endTurn}
-          />
-          {player.hasLost && (
-            <p className="px-1 text-xs font-semibold text-rose-300">
-              {player.name} lost
-              {player.loseReason === 'decked'
-                ? ' — decked (drew from empty library)'
-                : player.loseReason === 'commander_damage'
-                  ? ' — 21 commander damage'
-                  : player.loseReason === 'life'
-                    ? ' — life ≤ 0'
-                    : ''}
-            </p>
-          )}
-          <div className="flex flex-wrap gap-2 px-1">
-            {!rulesStrict && (
-              <ActionButton onClick={() => draw(1)} title="Debug free draw">
-                Draw (debug)
-              </ActionButton>
-            )}
-            {mulliganOpen && (
-              <>
-                <ActionButton onClick={keepHand} tone="accent">
-                  Keep hand
-                </ActionButton>
-                <ActionButton onClick={mulligan}>Mulligan</ActionButton>
-              </>
-            )}
-            <ActionButton onClick={shuffleLibrary}>Shuffle</ActionButton>
-            <ActionButton onClick={runAiOpponentStep}>AI step</ActionButton>
-            <ActionButton onClick={() => void persistSession()} tone="muted">
-              Save
-            </ActionButton>
-            <ActionButton onClick={endGame} tone="muted">
-              End game
-            </ActionButton>
-          </div>
-          <p className="w-full px-1 text-[10px] text-slate-500">
-            Cyan glow = legal play / tap / effect target. Long-press or{' '}
-            <span className="text-sky-300">i</span> for full card. Stack panel is
-            a stub (priority engine later).
-            {rulesStrict ? ' Arena zone rules on.' : ' Debug grants on (zone rules still enforced).'}
-          </p>
-        </div>
-      ) : (
+    <div className="relative mx-auto flex max-w-6xl flex-col gap-2 px-2 pb-28 pt-2 sm:px-4">
+      {!gameActive && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3">
           <p className="text-sm font-medium text-amber-100">
             No game started yet
           </p>
           <p className="mt-1 text-xs text-amber-200/70">
             Start a game below to deal opening hands, put commanders in the
-            command zone, and track turns. Drawing happens on the draw step —
-            not by spamming a Draw button.
+            command zone, and track turns. Drawing happens on the draw step.
           </p>
         </div>
       )}
@@ -304,234 +316,240 @@ export function TabletopPage() {
       )}
 
       {gameActive && (
-        <div
-          className={[
-            'grid gap-2',
-            seatCount === 1
-              ? 'grid-cols-1'
-              : seatCount === 2
-                ? 'grid-cols-2'
-                : 'grid-cols-2 lg:grid-cols-4',
-          ].join(' ')}
-        >
-          {players.map((p, i) => (
-            <div
-              key={p.id}
-              className={[
-                'rounded-xl border p-3 transition',
-                p.hasLost
-                  ? 'border-rose-500/50 bg-rose-950/40 opacity-80'
-                  : i === activeSeat
-                    ? 'border-emerald-400 bg-emerald-950/50 ring-1 ring-emerald-400/40'
-                    : 'border-slate-800 bg-slate-900/60',
-              ].join(' ')}
-            >
+        <>
+          {/* Slim top bar: life + overflow only */}
+          <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+              {opponents.map((p) => {
+                const idx = players.findIndex((x) => x.id === p.id)
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setActiveSeat(idx)}
+                    className={[
+                      'flex shrink-0 items-center gap-2 rounded-full border bg-slate-950/80 py-1 pl-1 pr-3',
+                      p.hasLost
+                        ? 'border-rose-500/40 opacity-60'
+                        : p.id === turn.activePlayerId
+                          ? 'border-amber-400/60'
+                          : 'border-slate-700',
+                    ].join(' ')}
+                  >
+                    <LifeBadge life={p.life} size="sm" lost={p.hasLost} />
+                    <span className="max-w-[4.5rem] truncate text-[11px] font-medium text-slate-200">
+                      {p.name}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="relative shrink-0">
               <button
                 type="button"
-                className="text-left text-xs font-semibold text-slate-300"
-                onClick={() => setActiveSeat(i)}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-lg text-slate-300 ring-1 ring-slate-700"
+                aria-label="Table menu"
+                onClick={() => setMenuOpen((v) => !v)}
               >
-                {p.name}
-                {p.hasLost ? ' · LOST' : i === activeSeat ? ' · playing' : ''}
-                {p.deckId ? '' : ' · empty'}
+                ⋯
               </button>
-              <div className="mt-1 flex items-center justify-center gap-3">
-                <button
-                  type="button"
-                  className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-800 text-2xl hover:bg-slate-700"
-                  onClick={() => adjustLife(-1, i)}
-                  aria-label="Minus life"
-                >
-                  −
-                </button>
-                <span className="min-w-[3.5rem] text-center text-4xl font-black tabular-nums text-emerald-300">
-                  {p.life}
-                </span>
-                <button
-                  type="button"
-                  className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-800 text-2xl hover:bg-slate-700"
-                  onClick={() => adjustLife(1, i)}
-                  aria-label="Plus life"
-                >
-                  +
-                </button>
-              </div>
-              {seatCount > 1 && (
-                <div className="mt-2 flex flex-wrap justify-center gap-1">
-                  {players
-                    .filter((o) => o.id !== p.id)
-                    .map((o) => (
-                      <div
-                        key={o.id}
-                        className="flex items-center gap-1 rounded-full bg-black/40 px-2 py-1 text-[10px] text-rose-200"
+              {menuOpen && (
+                <div className="absolute right-0 top-10 z-40 w-44 overflow-hidden rounded-xl border border-slate-700 bg-slate-950 shadow-xl">
+                  {mulliganOpen && (
+                    <>
+                      <MenuItem
+                        onClick={() => {
+                          keepHand()
+                          setMenuOpen(false)
+                        }}
                       >
-                        <span className="max-w-[4rem] truncate">{o.name}</span>
-                        <button
-                          type="button"
-                          className="px-1"
-                          onClick={() => adjustCommanderDamage(o.id, -1, i)}
-                        >
-                          −
-                        </button>
-                        <span className="tabular-nums font-bold">
-                          {p.commanderDamage[o.id] ?? 0}
-                        </span>
-                        <button
-                          type="button"
-                          className="px-1"
-                          onClick={() => adjustCommanderDamage(o.id, 1, i)}
-                        >
-                          +
-                        </button>
-                      </div>
-                    ))}
-                </div>
-              )}
-              {seatCount === 1 && (
-                <div className="mt-2 flex items-center justify-center gap-2 text-xs text-rose-200">
-                  <span>Cmd dmg</span>
-                  <button
-                    type="button"
-                    className="h-8 w-8 rounded bg-slate-800"
-                    onClick={() => adjustCommanderDamage('opp-cmd', -1)}
+                        Keep hand
+                      </MenuItem>
+                      <MenuItem
+                        onClick={() => {
+                          mulligan()
+                          setMenuOpen(false)
+                        }}
+                      >
+                        Mulligan
+                      </MenuItem>
+                    </>
+                  )}
+                  {!rulesStrict && (
+                    <MenuItem
+                      onClick={() => {
+                        draw(1)
+                        setMenuOpen(false)
+                      }}
+                    >
+                      Draw (debug)
+                    </MenuItem>
+                  )}
+                  <MenuItem
+                    onClick={() => {
+                      shuffleLibrary()
+                      setMenuOpen(false)
+                    }}
                   >
-                    −
-                  </button>
-                  <span className="tabular-nums font-bold">
-                    {p.commanderDamage['opp-cmd'] ?? 0}
-                  </span>
-                  <button
-                    type="button"
-                    className="h-8 w-8 rounded bg-slate-800"
-                    onClick={() => adjustCommanderDamage('opp-cmd', 1)}
+                    Shuffle library
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      runAiOpponentStep()
+                      setMenuOpen(false)
+                    }}
                   >
-                    +
-                  </button>
+                    AI step
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      void persistSession()
+                      setMenuOpen(false)
+                    }}
+                  >
+                    Save session
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      endTurn()
+                      setMenuOpen(false)
+                    }}
+                  >
+                    End turn now
+                  </MenuItem>
+                  <MenuItem
+                    danger
+                    onClick={() => {
+                      endGame()
+                      setMenuOpen(false)
+                    }}
+                  >
+                    End game
+                  </MenuItem>
                 </div>
               )}
             </div>
-          ))}
-        </div>
-      )}
+          </div>
 
-      {moveNotice && gameActive && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
-          {moveNotice}
-        </div>
-      )}
+          {player.hasLost && (
+            <p className="text-xs font-semibold text-rose-300">
+              {player.name} lost
+              {player.loseReason === 'decked'
+                ? ' — decked'
+                : player.loseReason === 'commander_damage'
+                  ? ' — 21 commander damage'
+                  : player.loseReason === 'life'
+                    ? ' — life ≤ 0'
+                    : ''}
+            </p>
+          )}
 
-      {gameActive && (
-        <div className="grid gap-2 sm:grid-cols-[1fr_14rem]">
-          <div className="min-w-0" />
-          <StackStub pendingActions={pendingActions} />
-        </div>
-      )}
+          {mulliganOpen && (
+            <div className="flex gap-2">
+              <ActionButton onClick={keepHand} tone="accent">
+                Keep hand
+              </ActionButton>
+              <ActionButton onClick={mulligan}>Mulligan</ActionButton>
+            </div>
+          )}
 
-      {selectedInstance && gameActive && (() => {
-        const card = player.zones[selectedInstance.zone].find(
-          (c) => c.instanceId === selectedInstance.instanceId,
-        )
-        const legal = getLegalDestinations(
-          selectedInstance.zone,
-          Boolean(card?.card.isCommander),
-        )
-        const legalZones = new Set(legal.map((l) => l.zone))
-        return (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-100">
-            <span>Move to:</span>
-            {MOVE_ZONES.filter((z) => z !== selectedInstance.zone).map((z) => {
-              // legalDestinations already enforces library-pending even in sandbox
-              const ok = legalZones.has(z)
-              return (
-                <button
-                  key={z}
-                  type="button"
-                  disabled={!ok}
-                  title={
-                    ok
-                      ? undefined
-                      : 'Needs a draw/mill/tutor/return effect'
-                  }
-                  className={[
-                    'min-h-9 rounded px-2 py-1 capitalize',
-                    ok
-                      ? 'bg-emerald-800/80'
-                      : 'cursor-not-allowed bg-slate-800/60 text-slate-500 line-through',
-                  ].join(' ')}
-                  onClick={() => {
-                    if (!ok) return
-                    moveCard(
-                      selectedInstance.zone,
-                      z,
-                      selectedInstance.instanceId,
-                    )
-                  }}
-                >
-                  {z}
-                </button>
+          {moveNotice && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
+              {moveNotice}
+            </div>
+          )}
+
+          {pendingActions.length > 0 && (
+            <div className="max-w-xs">
+              <StackStub pendingActions={pendingActions} />
+            </div>
+          )}
+
+          {selectedInstance &&
+            (() => {
+              const card = player.zones[selectedInstance.zone].find(
+                (c) => c.instanceId === selectedInstance.instanceId,
               )
-            })}
-            {selectedInstance.zone === 'battlefield' && (
-              <button
-                type="button"
-                className="min-h-9 rounded bg-amber-800/80 px-2 py-1"
-                onClick={() => toggleTap(selectedInstance.instanceId)}
-              >
-                Tap / Untap
-              </button>
-            )}
-            <button
-              type="button"
-              className="text-slate-400"
-              onClick={() => setSelectedInstance(null)}
-            >
-              Cancel
-            </button>
-            {legal.length === 0 && (
-              <span className="w-full text-[10px] text-amber-200/80">
-                No legal destinations right now — needs a card effect (draw,
-                mill, tutor, discard, reanimate…).
-              </span>
-            )}
-          </div>
-        )
-      })()}
+              const legal = getLegalDestinations(
+                selectedInstance.zone,
+                Boolean(card?.card.isCommander),
+              )
+              const legalZones = new Set(legal.map((l) => l.zone))
+              return (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-100">
+                  <span>Move to:</span>
+                  {MOVE_ZONES.filter((z) => z !== selectedInstance.zone).map(
+                    (z) => {
+                      const ok = legalZones.has(z)
+                      return (
+                        <button
+                          key={z}
+                          type="button"
+                          disabled={!ok}
+                          className={[
+                            'min-h-9 rounded px-2 py-1 capitalize',
+                            ok
+                              ? 'bg-emerald-800/80'
+                              : 'cursor-not-allowed bg-slate-800/60 text-slate-500 line-through',
+                          ].join(' ')}
+                          onClick={() => {
+                            if (!ok) return
+                            moveCard(
+                              selectedInstance.zone,
+                              z,
+                              selectedInstance.instanceId,
+                            )
+                          }}
+                        >
+                          {z}
+                        </button>
+                      )
+                    },
+                  )}
+                  {selectedInstance.zone === 'battlefield' && (
+                    <button
+                      type="button"
+                      className="min-h-9 rounded bg-amber-800/80 px-2 py-1"
+                      onClick={() => toggleTap(selectedInstance.instanceId)}
+                    >
+                      Tap / Untap
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="text-slate-400"
+                    onClick={() => setSelectedInstance(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )
+            })()}
 
-      <div
-        className="relative overflow-hidden rounded-3xl border-4 border-amber-950/80 shadow-2xl shadow-black/50"
-        style={{
-          backgroundColor: '#0d3b2e',
-          backgroundImage: table.backgroundUrl
-            ? `linear-gradient(rgba(8,40,30,0.55), rgba(8,40,30,0.72)), url(${table.backgroundUrl})`
-            : 'radial-gradient(ellipse at center, #1a6b4f 0%, #0a2f24 55%, #061a14 100%)',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          minHeight: '28rem',
-        }}
-      >
-        <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] ring-1 ring-inset ring-amber-200/10" />
+          {/* Arena board */}
+          <div
+            className="arena-board relative overflow-hidden rounded-3xl border-4 border-amber-950/80 shadow-2xl shadow-black/50"
+            style={{
+              backgroundColor: '#0d3b2e',
+              backgroundImage: table.backgroundUrl
+                ? `linear-gradient(rgba(8,40,30,0.55), rgba(8,40,30,0.72)), url(${table.backgroundUrl})`
+                : 'radial-gradient(ellipse at center, #1a6b4f 0%, #0a2f24 55%, #061a14 100%)',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+              minHeight: '32rem',
+            }}
+          >
+            <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] ring-1 ring-inset ring-amber-200/10" />
 
-        {!gameActive ? (
-          <div className="flex min-h-[28rem] flex-col items-center justify-center gap-2 p-6 text-center">
-            <div className="rounded-full border border-emerald-400/20 bg-black/25 px-6 py-4">
-              <p className="text-lg font-semibold text-emerald-50">
-                Commander table
-              </p>
-              <p className="mt-1 max-w-sm text-sm text-emerald-100/60">
-                Start a game to deal hands and track turns. Seats will appear
-                around this felt when you play hotseat multiplayer.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="relative grid gap-3 p-3 sm:p-4">
-            {seatCount > 1 && (
-              <div className="flex flex-wrap justify-center gap-2">
-                {players.map((p, i) =>
-                  i === activeSeat ? null : (
+            <div className="relative flex min-h-[32rem] flex-col gap-2 p-2 sm:p-3">
+              {/* Opponent strip */}
+              {seatCount > 1 && (
+                <div className="flex flex-wrap justify-center gap-2">
+                  {opponents.map((p) => (
                     <div
                       key={p.id}
-                      className="rounded-lg border border-white/10 bg-black/35 px-3 py-1.5 text-center text-[11px] text-emerald-100/80"
+                      className="rounded-lg border border-white/10 bg-black/35 px-3 py-1 text-center text-[11px] text-emerald-100/80"
                     >
                       <div className="font-semibold">
                         {p.name}
@@ -541,328 +559,366 @@ export function TabletopPage() {
                         {p.life}
                       </div>
                       <div className="text-[10px] text-emerald-200/50">
-                        H{p.zones.hand.length} · L{p.zones.library.length} · BF
-                        {p.zones.battlefield.length}
+                        H{p.zones.hand.length} · L{p.zones.library.length}
                       </div>
                     </div>
-                  ),
+                  ))}
+                </div>
+              )}
+
+              {/* Top piles */}
+              <div className="grid grid-cols-3 gap-1.5">
+                <PileZone
+                  title="Command"
+                  count={player.zones.command.length}
+                  {...zoneHandlers('command')}
+                >
+                  {player.zones.command.map((c) => (
+                    <CardChip
+                      key={c.instanceId}
+                      card={c.card}
+                      size="command"
+                      draggable
+                      selected={selectedInstance?.instanceId === c.instanceId}
+                      highlighted={isCardHighlighted('command', c)}
+                      onClick={() => openInspect('command', c)}
+                      onInspect={() => openInspect('command', c)}
+                      onDragStart={() => selectForMove('command', c)}
+                    />
+                  ))}
+                </PileZone>
+                <PileZone
+                  title="GY"
+                  count={player.zones.graveyard.length}
+                  {...zoneHandlers('graveyard')}
+                >
+                  {player.zones.graveyard.slice(-4).map((c) => (
+                    <CardChip
+                      key={c.instanceId}
+                      card={c.card}
+                      size="tiny"
+                      hideName
+                      draggable
+                      selected={selectedInstance?.instanceId === c.instanceId}
+                      highlighted={isCardHighlighted('graveyard', c)}
+                      onClick={() => openInspect('graveyard', c)}
+                      onInspect={() => openInspect('graveyard', c)}
+                      onDragStart={() => selectForMove('graveyard', c)}
+                    />
+                  ))}
+                </PileZone>
+                <PileZone
+                  title="Exile"
+                  count={player.zones.exile.length}
+                  {...zoneHandlers('exile')}
+                >
+                  {player.zones.exile.slice(-4).map((c) => (
+                    <CardChip
+                      key={c.instanceId}
+                      card={c.card}
+                      size="tiny"
+                      hideName
+                      draggable
+                      selected={selectedInstance?.instanceId === c.instanceId}
+                      highlighted={isCardHighlighted('exile', c)}
+                      onClick={() => openInspect('exile', c)}
+                      onInspect={() => openInspect('exile', c)}
+                      onDragStart={() => selectForMove('exile', c)}
+                    />
+                  ))}
+                </PileZone>
+              </div>
+
+              {/* Combat lane divider */}
+              <div className="combat-lane mx-4 h-px bg-gradient-to-r from-transparent via-rose-400/50 to-transparent" />
+
+              {/* Creatures / permanents */}
+              <div
+                className={[
+                  'min-h-[9rem] flex-1 rounded-xl border border-emerald-400/15 bg-black/20 p-2',
+                  dragOverZone === 'battlefield' ? 'ring-2 ring-emerald-400/50' : '',
+                ].join(' ')}
+                onDragOver={zoneHandlers('battlefield').onDragOver}
+                onDrop={zoneHandlers('battlefield').onDrop}
+              >
+                <div className="mb-1 flex items-center justify-between px-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-100/45">
+                    Battlefield
+                  </span>
+                  <span className="text-[10px] tabular-nums text-emerald-100/35">
+                    {creatures.length} · {lands.length} lands
+                  </span>
+                </div>
+                {creatures.length === 0 && lands.length === 0 ? (
+                  <p className="p-3 text-center text-xs text-emerald-100/30">
+                    Empty — tap a card to read, or play from hand
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap content-start items-end gap-2">
+                    {creatures.map((c) => (
+                      <CardChip
+                        key={c.instanceId}
+                        card={c.card}
+                        size="boardLg"
+                        hideName
+                        draggable
+                        tapped={c.tapped}
+                        selected={
+                          selectedInstance?.instanceId === c.instanceId
+                        }
+                        highlighted={isCardHighlighted('battlefield', c)}
+                        onClick={() => openInspect('battlefield', c)}
+                        onInspect={() => openInspect('battlefield', c)}
+                        onDragStart={() => selectForMove('battlefield', c)}
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
-            )}
 
-            <div className="grid grid-cols-3 gap-2">
-              <ZonePanel
-                title="Command"
-                count={player.zones.command.length}
-                compact
-                className="bg-black/30"
-                {...zoneHandlers('command')}
-              >
-                {player.zones.command.map((c) => (
-                  <CardChip
-                    key={c.instanceId}
-                    card={c.card}
-                    size="command"
-                    draggable
-                    selected={selectedInstance?.instanceId === c.instanceId}
-                    highlighted={isCardHighlighted('command', c)}
-                    onClick={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'command',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onInspect={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'command',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onDragStart={() =>
-                      setSelectedInstance({
-                        playerId: player.id,
-                        zone: 'command',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                  />
-                ))}
-              </ZonePanel>
-              <ZonePanel
-                title="Graveyard"
-                count={player.zones.graveyard.length}
-                compact
-                className="bg-black/30"
-                {...zoneHandlers('graveyard')}
-              >
-                {player.zones.graveyard.slice(-6).map((c) => (
-                  <CardChip
-                    key={c.instanceId}
-                    card={c.card}
-                    size="tiny"
-                    draggable
-                    selected={selectedInstance?.instanceId === c.instanceId}
-                    highlighted={isCardHighlighted('graveyard', c)}
-                    onClick={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'graveyard',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onInspect={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'graveyard',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onDragStart={() =>
-                      setSelectedInstance({
-                        playerId: player.id,
-                        zone: 'graveyard',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                  />
-                ))}
-              </ZonePanel>
-              <ZonePanel
-                title="Exile"
-                count={player.zones.exile.length}
-                compact
-                className="bg-black/30"
-                {...zoneHandlers('exile')}
-              >
-                {player.zones.exile.slice(-6).map((c) => (
-                  <CardChip
-                    key={c.instanceId}
-                    card={c.card}
-                    size="tiny"
-                    draggable
-                    selected={selectedInstance?.instanceId === c.instanceId}
-                    highlighted={isCardHighlighted('exile', c)}
-                    onClick={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'exile',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onInspect={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'exile',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onDragStart={() =>
-                      setSelectedInstance({
-                        playerId: player.id,
-                        zone: 'exile',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                  />
-                ))}
-              </ZonePanel>
-            </div>
-
-            <ZonePanel
-              title={`${player.name} — Battlefield`}
-              count={player.zones.battlefield.length}
-              className="min-h-[11rem] border border-emerald-400/20 bg-black/25"
-              {...zoneHandlers('battlefield')}
-            >
-              {player.zones.battlefield.length === 0 ? (
-                <p className="p-3 text-xs text-emerald-100/35">
-                  Battlefield empty — tap a card to read it, Select for move, or
-                  drag.
-                </p>
-              ) : (
-                player.zones.battlefield.map((c) => (
-                  <CardChip
-                    key={c.instanceId}
-                    card={c.card}
-                    size="board"
-                    draggable
-                    tapped={c.tapped}
-                    selected={selectedInstance?.instanceId === c.instanceId}
-                    highlighted={isCardHighlighted('battlefield', c)}
-                    onClick={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'battlefield',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onInspect={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'battlefield',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onDragStart={() =>
-                      setSelectedInstance({
-                        playerId: player.id,
-                        zone: 'battlefield',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                  />
-                ))
+              {/* Land row — stacked by name */}
+              {(landStacks.length > 0 || true) && (
+                <div
+                  className={[
+                    'rounded-xl border border-emerald-400/10 bg-black/25 px-2 py-1.5',
+                    dragOverZone === 'battlefield'
+                      ? 'ring-1 ring-emerald-400/40'
+                      : '',
+                  ].join(' ')}
+                  onDragOver={zoneHandlers('battlefield').onDragOver}
+                  onDrop={zoneHandlers('battlefield').onDrop}
+                >
+                  <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-emerald-100/40">
+                    Lands
+                  </div>
+                  {landStacks.length === 0 ? (
+                    <p className="text-[10px] text-emerald-100/25">No lands</p>
+                  ) : (
+                    <div className="flex flex-wrap items-end gap-3">
+                      {landStacks.map((stack) => {
+                        const face = stack.cards[0]!
+                        const showTapped = stack.tapped > 0 && stack.untapped === 0
+                        return (
+                          <button
+                            key={stack.key}
+                            type="button"
+                            className="relative flex flex-col items-center gap-0.5"
+                            onClick={() => {
+                              // Tap an untapped land in the stack, else inspect
+                              const untapped = stack.cards.find((c) => !c.tapped)
+                              if (untapped) {
+                                toggleTap(untapped.instanceId)
+                              } else {
+                                openInspect('battlefield', face)
+                              }
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault()
+                              openInspect('battlefield', face)
+                            }}
+                            title={`${stack.name} ×${stack.cards.length} (${stack.untapped} untapped)`}
+                          >
+                            <div className="relative">
+                              {stack.cards.length > 1 && (
+                                <span className="absolute -left-1 top-1 h-[85%] w-[85%] rotate-[-8deg] rounded-md bg-slate-800/80 ring-1 ring-black/40" />
+                              )}
+                              <CardChip
+                                card={face.card}
+                                size="land"
+                                hideName
+                                tapped={showTapped}
+                                highlighted={stack.cards.some((c) =>
+                                  isCardHighlighted('battlefield', c),
+                                )}
+                              />
+                              {stack.cards.length > 1 && (
+                                <span className="absolute -right-1 -top-1 z-20 rounded-full bg-slate-950 px-1 text-[9px] font-bold text-amber-200 ring-1 ring-amber-500/40">
+                                  ×{stack.cards.length}
+                                </span>
+                              )}
+                            </div>
+                            <span className="max-w-[3.5rem] truncate text-[8px] text-emerald-100/50">
+                              {stack.untapped}/{stack.cards.length}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
-            </ZonePanel>
 
-            <div className="grid grid-cols-[auto_1fr] gap-2">
-              <ZonePanel
-                title="Library"
-                count={player.zones.library.length}
-                compact
-                className="w-28 bg-black/35 sm:w-36"
-                {...zoneHandlers('library')}
-              >
-                <div className="flex w-full flex-col gap-1">
-                  <div className="flex justify-center gap-0.5">
-                    {player.zones.library.slice(0, 3).map((c) => (
+              {/* You: life + library + hand */}
+              <div className="mt-auto grid grid-cols-[auto_1fr_auto] items-end gap-2">
+                <div className="flex flex-col items-center gap-1">
+                  <LifeBadge
+                    life={player.life}
+                    size="lg"
+                    active={yourTurn}
+                    lost={player.hasLost}
+                  />
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      className="h-7 w-7 rounded-full bg-black/50 text-sm text-white"
+                      onClick={() => adjustLife(-1)}
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      className="h-7 w-7 rounded-full bg-black/50 text-sm text-white"
+                      onClick={() => adjustLife(1)}
+                    >
+                      +
+                    </button>
+                  </div>
+                  {seatCount === 1 && (
+                    <div className="flex items-center gap-1 text-[9px] text-rose-200/80">
+                      <span>Cmd</span>
+                      <button
+                        type="button"
+                        className="h-5 w-5 rounded bg-black/40"
+                        onClick={() => adjustCommanderDamage('opp-cmd', -1)}
+                      >
+                        −
+                      </button>
+                      <span className="tabular-nums font-bold">
+                        {player.commanderDamage['opp-cmd'] ?? 0}
+                      </span>
+                      <button
+                        type="button"
+                        className="h-5 w-5 rounded bg-black/40"
+                        onClick={() => adjustCommanderDamage('opp-cmd', 1)}
+                      >
+                        +
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  className={[
+                    'min-h-[7.5rem] rounded-xl border border-white/10 bg-black/30 p-1',
+                    dragOverZone === 'hand' ? 'ring-2 ring-emerald-400/50' : '',
+                  ].join(' ')}
+                  onDragOver={zoneHandlers('hand').onDragOver}
+                  onDrop={zoneHandlers('hand').onDrop}
+                >
+                  {player.zones.hand.length === 0 ? (
+                    <p className="p-2 text-center text-xs text-emerald-100/30">
+                      Hand empty
+                    </p>
+                  ) : (
+                    <div className="hand-dock w-full">
+                      {player.zones.hand.map((c) => (
+                        <div
+                          key={c.instanceId}
+                          className={[
+                            'hand-dock__card',
+                            selectedInstance?.instanceId === c.instanceId
+                              ? 'is-selected'
+                              : '',
+                          ].join(' ')}
+                        >
+                          <CardChip
+                            card={c.card}
+                            size="hand"
+                            draggable
+                            selected={
+                              selectedInstance?.instanceId === c.instanceId
+                            }
+                            highlighted={isCardHighlighted('hand', c)}
+                            onClick={() => openInspect('hand', c)}
+                            onInspect={() => openInspect('hand', c)}
+                            onDragStart={() => selectForMove('hand', c)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  className={[
+                    'flex w-[4.5rem] flex-col items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1',
+                    dragOverZone === 'library' ? 'ring-2 ring-emerald-400/50' : '',
+                  ].join(' ')}
+                  onDragOver={zoneHandlers('library').onDragOver}
+                  onDrop={zoneHandlers('library').onDrop}
+                >
+                  <span className="text-[9px] uppercase text-emerald-100/40">
+                    Lib {player.zones.library.length}
+                  </span>
+                  <div className="flex justify-center">
+                    {player.zones.library.slice(0, 1).map((c) => (
                       <CardChip
                         key={c.instanceId}
                         card={c.card}
                         size="tiny"
                         faceDown
-                        highlighted={isCardHighlighted('library', c)}
                       />
                     ))}
                   </div>
-                  <div className="flex flex-col gap-0.5">
-                    {(() => {
-                      const libLegal = new Set(
-                        getLegalDestinations('library').map((l) => l.zone),
-                      )
-                      // Never show free top cheats — pending effect only (Strict on or off)
-                      const showHand = libLegal.has('hand')
-                      const showBf = libLegal.has('battlefield')
-                      const showGy = libLegal.has('graveyard')
-                      return (
-                        <>
-                          {showHand && (
-                            <TinyButton
-                              onClick={() => moveTopLibraryTo('hand')}
-                            >
-                              Top → Hand
-                            </TinyButton>
-                          )}
-                          {showBf && (
-                            <TinyButton
-                              onClick={() => moveTopLibraryTo('battlefield')}
-                            >
-                              Top → BF
-                            </TinyButton>
-                          )}
-                          {showGy && (
-                            <TinyButton
-                              onClick={() => moveTopLibraryTo('graveyard')}
-                            >
-                              Top → GY
-                            </TinyButton>
-                          )}
-                          {!showHand && !showBf && !showGy && (
-                              <p className="px-0.5 text-[9px] leading-snug text-emerald-100/45">
-                                Top-of-library moves need a draw/mill/tutor
-                                effect.
-                              </p>
-                            )}
-                          {!rulesStrict && (
-                            <>
-                              <TinyButton
-                                onClick={() =>
-                                  grantPendingAction('mill', 3, 'Mill 3')
-                                }
-                              >
-                                Grant mill 3
-                              </TinyButton>
-                              <TinyButton
-                                onClick={() =>
-                                  grantPendingAction(
-                                    'discard',
-                                    1,
-                                    'Discard 1',
-                                  )
-                                }
-                              >
-                                Grant discard
-                              </TinyButton>
-                            </>
-                          )}
-                        </>
-                      )
-                    })()}
-                  </div>
-                </div>
-              </ZonePanel>
-
-              <ZonePanel
-                title="Hand"
-                count={player.zones.hand.length}
-                className="min-h-[8.5rem] bg-black/35"
-                {...zoneHandlers('hand')}
-              >
-                {player.zones.hand.length === 0 ? (
-                  <p className="p-2 text-xs text-emerald-100/35">Hand empty</p>
-                ) : (
-                  <div className="hand-dock w-full">
-                    {player.zones.hand.map((c) => (
-                      <div
-                        key={c.instanceId}
-                        className={[
-                          'hand-dock__card',
-                          selectedInstance?.instanceId === c.instanceId
-                            ? 'is-selected'
-                            : '',
-                        ].join(' ')}
-                      >
-                        <CardChip
-                          card={c.card}
-                          size="hand"
-                          draggable
-                          selected={
-                            selectedInstance?.instanceId === c.instanceId
-                          }
-                          highlighted={isCardHighlighted('hand', c)}
-                          onClick={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'hand',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                    onInspect={() =>
-                      setInspect({
-                        card: c.card,
-                        zone: 'hand',
-                        instanceId: c.instanceId,
-                      })
-                    }
-                          onDragStart={() =>
-                            setSelectedInstance({
-                              playerId: player.id,
-                              zone: 'hand',
-                              instanceId: c.instanceId,
-                            })
-                          }
-                        />
+                  {(() => {
+                    const libLegal = new Set(
+                      getLegalDestinations('library').map((l) => l.zone),
+                    )
+                    return (
+                      <div className="flex w-full flex-col gap-0.5">
+                        {libLegal.has('hand') && (
+                          <TinyButton onClick={() => moveTopLibraryTo('hand')}>
+                            → Hand
+                          </TinyButton>
+                        )}
+                        {libLegal.has('battlefield') && (
+                          <TinyButton
+                            onClick={() => moveTopLibraryTo('battlefield')}
+                          >
+                            → BF
+                          </TinyButton>
+                        )}
+                        {libLegal.has('graveyard') && (
+                          <TinyButton
+                            onClick={() => moveTopLibraryTo('graveyard')}
+                          >
+                            → GY
+                          </TinyButton>
+                        )}
+                        {!rulesStrict && (
+                          <TinyButton
+                            onClick={() =>
+                              grantPendingAction('mill', 3, 'Mill 3')
+                            }
+                          >
+                            Mill
+                          </TinyButton>
+                        )}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </ZonePanel>
+                    )
+                  })()}
+                </div>
+              </div>
             </div>
           </div>
-        )}
-      </div>
+
+          <PhaseRail
+            dock
+            phase={turn.phase}
+            turnNumber={turn.turnNumber}
+            activeName={activeName}
+            yourTurn={yourTurn}
+            lastAutoNote={turn.lastAutoNote}
+            stops={stops}
+            combatEntered={Boolean(turn.combatEntered)}
+            attackersDeclared={Boolean(turn.attackersDeclared)}
+            onPass={passPriority}
+            onStep={nextPhase}
+            onToggleStop={togglePhaseStop}
+            onEnterCombat={enterCombat}
+          />
+        </>
+      )}
 
       {inspect && (
         <CardDetailOverlay
@@ -890,13 +946,105 @@ export function TabletopPage() {
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
           Session log
         </h2>
-        <ul className="max-h-28 space-y-1 overflow-y-auto font-mono text-[11px] text-slate-400">
+        <ul className="max-h-24 space-y-1 overflow-y-auto font-mono text-[11px] text-slate-400">
           {log.map((line, i) => (
             <li key={`${i}-${line.slice(0, 16)}`}>{line}</li>
           ))}
         </ul>
       </aside>
     </div>
+  )
+}
+
+function LifeBadge({
+  life,
+  size = 'md',
+  active = false,
+  lost = false,
+}: {
+  life: number
+  size?: 'sm' | 'md' | 'lg'
+  active?: boolean
+  lost?: boolean
+}) {
+  const dim =
+    size === 'lg'
+      ? 'h-16 w-16 text-2xl'
+      : size === 'sm'
+        ? 'h-9 w-9 text-sm'
+        : 'h-12 w-12 text-lg'
+  return (
+    <span
+      className={[
+        'life-badge inline-flex items-center justify-center rounded-full font-black tabular-nums',
+        dim,
+        lost
+          ? 'bg-rose-950 text-rose-300 ring-2 ring-rose-500/50'
+          : active
+            ? 'bg-gradient-to-b from-amber-300 to-amber-600 text-slate-950 shadow-[0_0_16px_rgba(251,191,36,0.45)] ring-2 ring-amber-200/80'
+            : 'bg-slate-950 text-amber-100 ring-2 ring-amber-500/50',
+      ].join(' ')}
+    >
+      {life}
+    </span>
+  )
+}
+
+function PileZone({
+  title,
+  count,
+  children,
+  onDragOver,
+  onDrop,
+  dropActive,
+}: {
+  title: string
+  count: number
+  children: ReactNode
+  onDragOver: (e: DragEvent) => void
+  onDrop: (e: DragEvent) => void
+  dropActive?: boolean
+}) {
+  return (
+    <div
+      className={[
+        'rounded-xl border border-white/10 bg-black/30 p-1.5',
+        dropActive ? 'ring-2 ring-emerald-400/50' : '',
+      ].join(' ')}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
+      <div className="mb-1 flex justify-between px-0.5 text-[9px] uppercase tracking-wider text-emerald-100/40">
+        <span>{title}</span>
+        <span className="tabular-nums">{count}</span>
+      </div>
+      <div className="flex flex-wrap gap-1">{children}</div>
+    </div>
+  )
+}
+
+function MenuItem({
+  children,
+  onClick,
+  danger,
+}: {
+  children: ReactNode
+  onClick: () => void
+  danger?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        'block w-full px-3 py-2.5 text-left text-xs',
+        danger
+          ? 'text-rose-300 hover:bg-rose-950/50'
+          : 'text-slate-200 hover:bg-slate-800',
+      ].join(' ')}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -935,9 +1083,10 @@ function TinyButton({
     <button
       type="button"
       onClick={onClick}
-      className="min-h-7 rounded bg-black/40 px-1 py-0.5 text-[9px] text-emerald-100/80 ring-1 ring-emerald-500/20"
+      className="min-h-6 w-full rounded bg-black/40 px-1 py-0.5 text-[9px] text-emerald-100/80 ring-1 ring-emerald-500/20"
     >
       {children}
     </button>
   )
 }
+

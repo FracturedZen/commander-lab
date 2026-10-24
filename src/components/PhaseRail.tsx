@@ -1,27 +1,11 @@
 import {
   PHASE_LABEL,
-  PHASE_ORDER,
+  RAIL_SEGMENTS,
+  passButtonCopy,
+  phaseToRailSegment,
   type Phase,
+  type RailSegmentId,
 } from '@/lib/rules/turnMachine'
-
-/** Compact Arena-like phase ladder. Combat steps collapse under Combat. */
-const RAIL: { id: string; label: string; phases: Phase[] }[] = [
-  { id: 'beg', label: 'Beg', phases: ['untap', 'upkeep', 'draw'] },
-  { id: 'm1', label: 'Main', phases: ['main1'] },
-  {
-    id: 'cbt',
-    label: 'Combat',
-    phases: [
-      'combat_begin',
-      'combat_attackers',
-      'combat_blockers',
-      'combat_damage',
-      'combat_end',
-    ],
-  },
-  { id: 'm2', label: 'Main', phases: ['main2'] },
-  { id: 'end', label: 'End', phases: ['end'] },
-]
 
 type Props = {
   phase: Phase
@@ -29,8 +13,19 @@ type Props = {
   activeName: string
   yourTurn: boolean
   lastAutoNote?: string | null
-  onNextPhase: () => void
-  onEndTurn: () => void
+  stops: ReadonlySet<RailSegmentId>
+  combatEntered: boolean
+  attackersDeclared: boolean
+  /** Primary Arena Pass — auto-advances to next decision. */
+  onPass: () => void
+  /** Single micro-step (advanced). */
+  onStep?: () => void
+  /** Toggle a phase stop on the mini ladder. */
+  onToggleStop: (id: RailSegmentId) => void
+  /** Tap Combat while on Main 1 → enter combat. */
+  onEnterCombat?: () => void
+  /** Compact dock mode: mini ladder + big Pass (no huge header). */
+  dock?: boolean
 }
 
 export function PhaseRail({
@@ -39,11 +34,139 @@ export function PhaseRail({
   activeName,
   yourTurn,
   lastAutoNote,
-  onNextPhase,
-  onEndTurn,
+  stops,
+  combatEntered,
+  attackersDeclared,
+  onPass,
+  onStep,
+  onToggleStop,
+  onEnterCombat,
+  dock = true,
 }: Props) {
-  const idx = PHASE_ORDER.indexOf(phase)
+  const currentSeg = phaseToRailSegment(phase)
+  const copy = passButtonCopy({
+    phase,
+    stops,
+    combatEntered,
+    attackersDeclared,
+  })
 
+  function onRailTap(id: RailSegmentId) {
+    if (id === 'combat' && phase === 'main1' && onEnterCombat) {
+      onEnterCombat()
+      return
+    }
+    onToggleStop(id)
+  }
+
+  const ladder = (
+    <div className="phase-ladder flex items-center gap-1" role="list">
+      {RAIL_SEGMENTS.map((step) => {
+        const active = step.id === currentSeg
+        const stopped = stops.has(step.id)
+        const idx = RAIL_SEGMENTS.findIndex((s) => s.id === step.id)
+        const curIdx = RAIL_SEGMENTS.findIndex((s) => s.id === currentSeg)
+        const passed = idx < curIdx
+        return (
+          <button
+            key={step.id}
+            type="button"
+            role="listitem"
+            title={`${step.label}${stopped ? ' · stop set' : ' · tap to set stop'}${
+              step.id === 'combat' && phase === 'main1'
+                ? ' · tap to enter combat'
+                : ''
+            }`}
+            aria-label={`${step.label}${active ? ', current' : ''}${
+              stopped ? ', stop' : ''
+            }`}
+            aria-pressed={stopped}
+            onClick={() => onRailTap(step.id)}
+            className={[
+              'phase-ladder__hole relative flex h-7 min-w-[2.35rem] flex-1 flex-col items-center justify-center rounded-full border text-[9px] font-semibold uppercase tracking-wide transition sm:min-w-[2.6rem] sm:text-[10px]',
+              active
+                ? yourTurn
+                  ? 'border-amber-300 bg-amber-500/35 text-amber-50 shadow-[0_0_10px_rgba(251,191,36,0.45)]'
+                  : 'border-sky-300 bg-sky-500/35 text-sky-50 shadow-[0_0_10px_rgba(56,189,248,0.45)]'
+                : passed
+                  ? 'border-slate-700/70 bg-slate-900/60 text-slate-500'
+                  : 'border-slate-700 bg-black/40 text-slate-400',
+              stopped && !active
+                ? 'ring-2 ring-sky-400/70 ring-offset-1 ring-offset-slate-950'
+                : '',
+            ].join(' ')}
+          >
+            <span className="leading-none">{step.short}</span>
+            {stopped && (
+              <span
+                className={[
+                  'absolute -bottom-0.5 h-1.5 w-1.5 rounded-full',
+                  active ? 'bg-white' : 'bg-sky-300',
+                ].join(' ')}
+              />
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  if (dock) {
+    return (
+      <div className="phase-dock pointer-events-none fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-2 z-30 flex max-w-[11.5rem] flex-col items-stretch gap-1.5 sm:right-4">
+        <div className="pointer-events-auto rounded-2xl border border-sky-500/30 bg-slate-950/92 px-2 py-1.5 shadow-xl shadow-black/50 backdrop-blur-md">
+          <div className="mb-1 flex items-baseline justify-between gap-1 px-0.5">
+            <p className="truncate text-[9px] uppercase tracking-wider text-sky-300/75">
+              {yourTurn ? 'You' : activeName} · T{turnNumber}
+            </p>
+            <p className="truncate text-[10px] font-semibold text-white/90">
+              {PHASE_LABEL[phase]}
+            </p>
+          </div>
+          {ladder}
+          {lastAutoNote && (
+            <p className="mt-1 truncate px-0.5 text-[10px] text-amber-200/85">
+              {lastAutoNote}
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          className={[
+            'pointer-events-auto pass-btn min-h-[3.25rem] rounded-2xl px-3 py-2 text-left shadow-lg transition active:scale-[0.98]',
+            yourTurn
+              ? 'bg-gradient-to-br from-amber-400 to-orange-600 text-slate-950 shadow-amber-900/40'
+              : 'bg-gradient-to-br from-sky-400 to-blue-700 text-white shadow-sky-900/40',
+          ].join(' ')}
+          onClick={onPass}
+        >
+          <span className="block text-base font-black leading-tight tracking-wide">
+            {copy.label}
+          </span>
+          <span
+            className={[
+              'block text-[11px] font-medium leading-tight',
+              yourTurn ? 'text-amber-950/75' : 'text-sky-100/85',
+            ].join(' ')}
+          >
+            {copy.hint}
+          </span>
+        </button>
+        {onStep && (
+          <button
+            type="button"
+            className="pointer-events-auto self-end rounded-lg bg-slate-900/80 px-2 py-1 text-[10px] text-slate-400 ring-1 ring-slate-700"
+            onClick={onStep}
+            title="Advance one phase step"
+          >
+            Step
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  // Non-dock fallback (setup / desktop strip)
   return (
     <div className="phase-rail w-full rounded-xl border border-sky-500/25 bg-slate-950/90 px-2 py-2 shadow-lg shadow-black/40">
       <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-1 px-1">
@@ -57,59 +180,32 @@ export function PhaseRail({
           </span>
         </p>
       </div>
-      <div className="flex items-stretch gap-1">
-        {RAIL.map((step) => {
-          const active = step.phases.includes(phase)
-          const passed = step.phases.every(
-            (p) => PHASE_ORDER.indexOf(p) < idx,
-          )
-          return (
-            <div
-              key={step.id}
-              className={[
-                'flex min-h-9 flex-1 flex-col items-center justify-center rounded-lg border px-0.5 text-center transition',
-                active
-                  ? yourTurn
-                    ? 'border-amber-400/80 bg-amber-500/25 text-amber-50 shadow-[0_0_12px_rgba(251,191,36,0.35)]'
-                    : 'border-sky-400/80 bg-sky-500/25 text-sky-50 shadow-[0_0_12px_rgba(56,189,248,0.35)]'
-                  : passed
-                    ? 'border-slate-700/60 bg-slate-900/50 text-slate-500'
-                    : 'border-slate-800 bg-black/30 text-slate-400',
-              ].join(' ')}
-              title={step.phases.map((p) => PHASE_LABEL[p]).join(' → ')}
-            >
-              <span className="text-[10px] font-semibold leading-tight sm:text-[11px]">
-                {step.label}
-              </span>
-              {active && step.id === 'cbt' && (
-                <span className="text-[8px] text-amber-100/80">
-                  {PHASE_LABEL[phase].replace('Combat ', '').replace('Declare ', '')}
-                </span>
-              )}
-            </div>
-          )
-        })}
-      </div>
-      {lastAutoNote && (
-        <p className="mt-1 truncate px-1 text-[11px] text-amber-200/90">
-          {lastAutoNote}
-        </p>
-      )}
+      {ladder}
       <div className="mt-2 flex gap-2">
         <button
           type="button"
-          className="min-h-9 flex-1 rounded-lg bg-slate-800 px-2 text-xs font-medium text-slate-100"
-          onClick={onNextPhase}
+          className={[
+            'pass-btn min-h-11 flex-[2] rounded-xl px-3 text-sm font-bold',
+            yourTurn
+              ? 'bg-amber-500 text-slate-950'
+              : 'bg-sky-600 text-white',
+          ].join(' ')}
+          onClick={onPass}
         >
-          Next phase
+          {copy.label}
+          <span className="ml-1 text-xs font-medium opacity-80">
+            {copy.hint}
+          </span>
         </button>
-        <button
-          type="button"
-          className="min-h-9 flex-1 rounded-lg bg-sky-700/90 px-2 text-xs font-semibold text-white"
-          onClick={onEndTurn}
-        >
-          End turn
-        </button>
+        {onStep && (
+          <button
+            type="button"
+            className="min-h-11 flex-1 rounded-xl bg-slate-800 px-2 text-xs font-medium text-slate-100"
+            onClick={onStep}
+          >
+            Step
+          </button>
+        )}
       </div>
     </div>
   )

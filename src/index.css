@@ -133,3 +133,36 @@ textarea {
 .phase-rail {
   backdrop-filter: blur(8px);
 }
+
+/* Arena tapped: rotate + darken */
+.card-chip--tapped {
+  transform: rotate(90deg) scale(0.92);
+  filter: brightness(0.62) saturate(0.85);
+  opacity: 0.92;
+}
+
+.card-chip__pt {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.phase-dock {
+  max-width: min(11.5rem, calc(100vw - 1rem));
+}
+
+.pass-btn:focus-visible {
+  outline: 2px solid rgba(251, 191, 36, 0.9);
+  outline-offset: 2px;
+}
+
+.life-badge {
+  font-variant-numeric: tabular-nums;
+}
+
+.combat-lane {
+  box-shadow: 0 0 8px rgba(251, 113, 133, 0.35);
+}
+
+.arena-board {
+  /* leave room for fixed Pass dock on phones */
+  padding-bottom: 0.25rem;
+}

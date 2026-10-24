@@ -1,5 +1,5 @@
 import type { CardInstance } from './card'
-import type { Phase } from '@/lib/rules/turnMachine'
+import type { Phase, RailSegmentId } from '@/lib/rules/turnMachine'
 import type { PendingAction } from '@/lib/rules/moveLegality'
 
 export type ZoneName =
@@ -38,6 +38,15 @@ export interface TurnState {
   phase: Phase
   /** Short UX note from last auto action, e.g. "Drew 1". */
   lastAutoNote?: string | null
+  /**
+   * Arena-style phase stops (rail segment ids).
+   * Pass advances until the next stop or the next decision point.
+   */
+  phaseStops?: RailSegmentId[]
+  /** True once combat was entered this turn (rail tap or combat stop). */
+  combatEntered?: boolean
+  /** True if attackers were declared this combat (stub until combat engine). */
+  attackersDeclared?: boolean
 }
 
 export interface TableState {

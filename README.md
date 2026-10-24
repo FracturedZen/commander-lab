@@ -2,6 +2,8 @@
 
 Offline-first **Commander (EDH)** digital tabletop, deck builder, bulk testing, and AI coaching app.
 
+**v0.5.2** — Arena Pass + auto-advance phases, mini phase ladder with stops, art-first BF with P/T, stacked lands, cleaner phone HUD.
+
 **v0.5.1** — Arena-inspired table UX (cyan activatable glow, phase rail, hand fan, card detail, stack stub) + full card art (one printing per `oracle_id`).
 
 **v0.4.2** — Arena-style cyan glow on cards with a legal action now (play / tap / effect target).
@@ -72,7 +74,7 @@ Zone moves always go through `checkZoneMove` — sandbox only shows debug **Gran
 ### Tabletop
 - Felt-style digital table with spatial zones (hand bottom, battlefield center, piles around).
 - **Start game** flow: pick 1–4 seats + decks → deal 7 → commanders in command zone.
-- **Automatic turns:** End turn rotates hotseat, untaps permanents, draws 1; Next phase walks the phase wheel.
+- **Automatic turns:** Big **Pass** auto-advances to the next decision (Main 1 after untap/draw; Main 1→Main 2 unless Combat stop; Main 2→End turn). Mini phase ladder sets stops; Step = one micro-phase.
 - Turn banner always shows active player + phase.
 - Large tappable life totals + commander damage matrix.
 - Drag-and-drop to move; **tap a card to read** (full art + oracle); overlay has Select for move / Tap·Untap.
