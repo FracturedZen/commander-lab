@@ -1,0 +1,311 @@
+{
+  "id": "sample-krenko-goblins",
+  "name": "Starter: Krenko Goblins",
+  "commander": "Krenko, Mob Boss",
+  "notes": "Bundled mono-red goblin aggro for offline testing (precon-style).",
+  "colorIdentity": [
+    "R"
+  ],
+  "cards": [
+    {
+      "name": "Mountain",
+      "quantity": 25
+    },
+    {
+      "name": "Castle Embereth",
+      "quantity": 1
+    },
+    {
+      "name": "Den of the Bugbear",
+      "quantity": 1
+    },
+    {
+      "name": "Forgotten Cave",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Burrows",
+      "quantity": 1
+    },
+    {
+      "name": "Nykthos, Shrine to Nyx",
+      "quantity": 1
+    },
+    {
+      "name": "Phyrexian Tower",
+      "quantity": 1
+    },
+    {
+      "name": "Sol Ring",
+      "quantity": 1
+    },
+    {
+      "name": "Arcane Signet",
+      "quantity": 1
+    },
+    {
+      "name": "Ruby Medallion",
+      "quantity": 1
+    },
+    {
+      "name": "Lightning Greaves",
+      "quantity": 1
+    },
+    {
+      "name": "Swiftfoot Boots",
+      "quantity": 1
+    },
+    {
+      "name": "Skullclamp",
+      "quantity": 1
+    },
+    {
+      "name": "Herald's Horn",
+      "quantity": 1
+    },
+    {
+      "name": "Icon of Ancestry",
+      "quantity": 1
+    },
+    {
+      "name": "Door of Destinies",
+      "quantity": 1
+    },
+    {
+      "name": "Vanquisher's Banner",
+      "quantity": 1
+    },
+    {
+      "name": "Caged Sun",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Chieftain",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin King",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Warchief",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Matron",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Recruiter",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Lackey",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Instigator",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Rabblemaster",
+      "quantity": 1
+    },
+    {
+      "name": "Legion Warboss",
+      "quantity": 1
+    },
+    {
+      "name": "Krenko, Tin Street Kingpin",
+      "quantity": 1
+    },
+    {
+      "name": "Muxus, Goblin Grandee",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Trashmaster",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Cratermaker",
+      "quantity": 1
+    },
+    {
+      "name": "Conspicuous Snoop",
+      "quantity": 1
+    },
+    {
+      "name": "Skirk Prospector",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Sharpshooter",
+      "quantity": 1
+    },
+    {
+      "name": "Siege-Gang Commander",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Ringleader",
+      "quantity": 1
+    },
+    {
+      "name": "Pashalik Mons",
+      "quantity": 1
+    },
+    {
+      "name": "Mogg War Marshal",
+      "quantity": 1
+    },
+    {
+      "name": "Empty the Warrens",
+      "quantity": 1
+    },
+    {
+      "name": "Krenko's Command",
+      "quantity": 1
+    },
+    {
+      "name": "Hordeling Outburst",
+      "quantity": 1
+    },
+    {
+      "name": "Dragon Fodder",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin War Party",
+      "quantity": 1
+    },
+    {
+      "name": "Brightstone Ritual",
+      "quantity": 1
+    },
+    {
+      "name": "Shared Animosity",
+      "quantity": 1
+    },
+    {
+      "name": "Impact Tremors",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Bombardment",
+      "quantity": 1
+    },
+    {
+      "name": "Purphoros, God of the Forge",
+      "quantity": 1
+    },
+    {
+      "name": "Torbran, Thane of Red Fell",
+      "quantity": 1
+    },
+    {
+      "name": "Chaos Warp",
+      "quantity": 1
+    },
+    {
+      "name": "Blasphemous Act",
+      "quantity": 1
+    },
+    {
+      "name": "Vandalblast",
+      "quantity": 1
+    },
+    {
+      "name": "Abrade",
+      "quantity": 1
+    },
+    {
+      "name": "Lightning Bolt",
+      "quantity": 1
+    },
+    {
+      "name": "Shock",
+      "quantity": 1
+    },
+    {
+      "name": "Faithless Looting",
+      "quantity": 1
+    },
+    {
+      "name": "Thrill of Possibility",
+      "quantity": 1
+    },
+    {
+      "name": "Wheel of Fortune",
+      "quantity": 1
+    },
+    {
+      "name": "Reforge the Soul",
+      "quantity": 1
+    },
+    {
+      "name": "Jeska's Will",
+      "quantity": 1
+    },
+    {
+      "name": "Mana Geyser",
+      "quantity": 1
+    },
+    {
+      "name": "Dockside Extortionist",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Chirurgeon",
+      "quantity": 1
+    },
+    {
+      "name": "Battle Hymn",
+      "quantity": 1
+    },
+    {
+      "name": "Coat of Arms",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Assault",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Rally",
+      "quantity": 1
+    },
+    {
+      "name": "Mob Rule",
+      "quantity": 1
+    },
+    {
+      "name": "Massive Raid",
+      "quantity": 1
+    },
+    {
+      "name": "Outpost Siege",
+      "quantity": 1
+    },
+    {
+      "name": "The Reaver Cleaver",
+      "quantity": 1
+    },
+    {
+      "name": "Hazoret's Monument",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Motivator",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Bushwhacker",
+      "quantity": 1
+    },
+    {
+      "name": "Goblin Guide",
+      "quantity": 1
+    }
+  ]
+}
