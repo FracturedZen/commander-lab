@@ -24,6 +24,8 @@ export interface CardRef {
   commanderLegality?: string
   imageSmall?: string
   imageNormal?: string
+  /** Scryfall large art when available. */
+  imageLarge?: string
   isCommander?: boolean
   /** Deck-list quantity (basics may be > 1). */
   quantity?: number

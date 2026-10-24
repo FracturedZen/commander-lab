@@ -41,7 +41,7 @@ export interface CommanderLabDB extends DBSchema {
 }
 
 const DB_NAME = 'commander-lab'
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 let dbPromise: Promise<IDBPDatabase<CommanderLabDB>> | null = null
 
@@ -74,6 +74,18 @@ export function getDb(): Promise<IDBPDatabase<CommanderLabDB>> {
           }
           if (!db.objectStoreNames.contains('blobs')) {
             db.createObjectStore('blobs', { keyPath: 'key' })
+          }
+        }
+        if (oldVersion < 3 && db.objectStoreNames.contains('cards')) {
+          // Re-key to one art per oracle_id — force a fresh Sync cards.
+          db.deleteObjectStore('cards')
+          const cards = db.createObjectStore('cards', { keyPath: 'id' })
+          cards.createIndex('by-name', 'name')
+          cards.createIndex('by-oracle', 'oracleId')
+          cards.createIndex('by-name-norm', 'nameNorm')
+          if (db.objectStoreNames.contains('cardMeta')) {
+            db.deleteObjectStore('cardMeta')
+            db.createObjectStore('cardMeta', { keyPath: 'key' })
           }
         }
       },

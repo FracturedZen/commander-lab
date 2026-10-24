@@ -2,6 +2,10 @@
 
 Offline-first **Commander (EDH)** digital tabletop, deck builder, bulk testing, and AI coaching app.
 
+**v0.5.0** — Arena-inspired table UX (cyan activatable glow, phase rail, hand fan, card detail, stack stub) + full card art (one printing per `oracle_id`).
+
+**v0.4.2** — Arena-style cyan glow on cards with a legal action now (play / tap / effect target).
+
 **v0.4.1** — Strict zone moves: library/GY/exile need queued effects; auto-draw + plain-English Stats unchanged.
 
 **v0.4.0** — Strict MTG draw/turn rules (auto-draw on draw step), plain-English Stats, pendingDraws hook, decked loss.
@@ -50,8 +54,9 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 2. App decompresses in-browser and indexes trimmed fields into IndexedDB (chunked writes).
 3. Progress: catalog → download → decompress/index; failures show the real error string.
 4. Local fuzzy name search works offline afterward.
-5. Art uses Scryfall CDN when online; name/text fallback offline.
-6. **Starter decks work without sync** (stub card names until you sync).
+5. Art: Scryfall `normal`/`large` (DFC front face); **one art per `oracle_id`** (reprints collapsed; prefer non-digital + newest).
+6. Images lazy-load from CDN when online; card-shaped name fallback offline. Re-sync after upgrade to refresh oracle keys.
+7. **Starter decks work without sync** (stub names until you sync — then real art resolves).
 
 ### Deck builder & imports
 - **Builder**: search synced cards, set commander/partner, quantities, CI filter, legality badge (100 cards, singleton except basics, color identity).
@@ -68,6 +73,24 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 - Drag-and-drop **or** tap-to-move; tap battlefield card → Tap/Untap.
 - Bundled starters: **Krenko, Mob Boss** and **Aesi, Tyrant of Gyre Strait**.
 - Save / restore session; custom background blob; local AI step heuristic.
+
+
+## Inspired by MTG Arena (adopted vs deferred)
+
+**Adopted in v0.5**
+- Soft cyan/white **glow** on cards with a legal action right now (playable hand, castable commander, untapped permanents as tap stand-in, pending-effect targets).
+- **Phase rail** (Beg / Main / Combat / Main / End) with orange “your turn” / blue opponent styling cues.
+- **Hand fan** bottom dock with overlap + lift on hover/select.
+- **Full card preview** on long-press, context menu, or **i** (Scryfall normal/large art + oracle text).
+- **Stack chrome stub** listing queued `pendingActions` (mill/discard/etc.).
+- Full **card images** on table zones (lazy-loaded CDN URLs; text fallback offline).
+
+**Deferred**
+- Real stack / priority / Full Control / phase stops.
+- Combat attacker/blocker arrows and declaration UI.
+- True activated-ability parsing from Oracle text.
+- Prefetching every card image at sync time (we keep URL refs + browser cache).
+- Digital-arena 3D table / emotes.
 
 ### Stats
 - Hypergeometric draw odds.

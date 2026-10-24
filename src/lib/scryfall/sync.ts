@@ -1,6 +1,11 @@
 import { normalizeCardName, type CardRef } from '@/types/card'
 import { getDb, type StoredCardRow } from '@/lib/storage/db'
-import { mapScryfallToStored, type ScryfallBulkCard } from './mapCard'
+import {
+  dedupeByOracle,
+  mapScryfallToStored,
+  printingPreferenceScore,
+  type ScryfallBulkCard,
+} from './mapCard'
 
 export type SyncProgress = {
   phase: 'meta' | 'download' | 'decompress' | 'index' | 'done' | 'error'
@@ -285,6 +290,8 @@ async function indexJsonlStream(
   // oracle_cards is typically ~30–40k rows
   const approxTotal = 35000
 
+  const oracleScores = new Map<string, number>()
+
   const flush = async () => {
     if (batch.length === 0) return
     if (!cleared) {
@@ -292,8 +299,24 @@ async function indexJsonlStream(
       await db.clear('cards')
       cleared = true
     }
-    await writeCardBatches(batch, () => {}, signal, { skipClear: true })
-    written += batch.length
+    const keep: ScryfallBulkCard[] = []
+    for (const raw of batch) {
+      const key = raw.oracle_id ?? raw.id
+      const score = printingPreferenceScore(raw)
+      const prev = oracleScores.get(key)
+      if (prev != null && score <= prev) continue
+      oracleScores.set(key, score)
+      keep.push(raw)
+    }
+    if (keep.length === 0) {
+      batch = []
+      return
+    }
+    const db = await getDb()
+    const tx = db.transaction('cards', 'readwrite')
+    await Promise.all(keep.map((raw) => tx.store.put(mapScryfallToStored(raw))))
+    await tx.done
+    written = oracleScores.size
     batch = []
     onProgress(written, approxTotal)
   }
@@ -361,10 +384,13 @@ async function writeCardBatches(
     await db.clear('cards')
   }
 
+  // One art per oracle — collapse reprints (needed for default_cards fallback)
+  const unique = dedupeByOracle(rawCards)
+
   let written = 0
-  for (let i = 0; i < rawCards.length; i += WRITE_BATCH) {
+  for (let i = 0; i < unique.length; i += WRITE_BATCH) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-    const slice = rawCards.slice(i, i + WRITE_BATCH)
+    const slice = unique.slice(i, i + WRITE_BATCH)
     const tx = db.transaction('cards', 'readwrite')
     await Promise.all(slice.map((raw) => tx.store.put(mapScryfallToStored(raw))))
     await tx.done
@@ -442,6 +468,7 @@ type SearchEntry = {
   commanderLegality?: string
   imageSmall?: string
   imageNormal?: string
+  imageLarge?: string
   oracleId?: string
   oracleText?: string
   set?: string
@@ -472,6 +499,7 @@ async function loadSearchCache(): Promise<SearchEntry[]> {
       commanderLegality: c.commanderLegality,
       imageSmall: c.imageSmall,
       imageNormal: c.imageNormal,
+      imageLarge: c.imageLarge,
       oracleId: c.oracleId,
       oracleText: c.oracleText,
       set: c.set,
@@ -572,6 +600,7 @@ function entryToRef(c: SearchEntry): CardRef {
     commanderLegality: c.commanderLegality,
     imageSmall: c.imageSmall,
     imageNormal: c.imageNormal,
+    imageLarge: c.imageLarge,
     oracleText: c.oracleText,
   }
 }

@@ -268,3 +268,110 @@ export function legalDestinations(opts: {
 export function describeBlockedMove(from: ZoneName, to: ZoneName): string {
   return `Can’t move ${from} → ${to} without an effect.`
 }
+
+/**
+ * Arena-style “can activate / can take a legal action now” for glow highlight.
+ * Pragmatic v1 — no Oracle parser. GY/exile/library only glow when a matching
+ * pendingAction exists (even in sandbox), so we don’t light up every card.
+ */
+export function cardCanActivate(opts: {
+  zone: ZoneName
+  rulesStrict: boolean
+  phase: Phase
+  playerId: string
+  pendingActions: PendingAction[]
+  isCommander?: boolean
+  tapped?: boolean
+  /** True when this seat is the turn’s active player. */
+  isActivePlayer: boolean
+  gameActive: boolean
+  mulliganOpen?: boolean
+}): boolean {
+  const {
+    zone,
+    rulesStrict,
+    phase,
+    playerId,
+    pendingActions,
+    isCommander,
+    tapped,
+    isActivePlayer,
+    gameActive,
+  } = opts
+
+  if (!gameActive || !isActivePlayer) return false
+
+  const hasPending = (types: PendingActionType[]) =>
+    Boolean(findAction(pendingActions, playerId, types))
+
+  // Hand: playable this main phase, or discard target
+  if (zone === 'hand') {
+    if (hasPending(['discard'])) return true
+    const play = checkZoneMove({
+      from: 'hand',
+      to: 'battlefield',
+      rulesStrict,
+      phase,
+      playerId,
+      pendingActions,
+      isCommander,
+    })
+    return play.allowed
+  }
+
+  // Command: cast commander → BF (prefer main phase under strict)
+  if (zone === 'command') {
+    if (rulesStrict && !MAIN_PHASES.includes(phase)) return false
+    const cast = checkZoneMove({
+      from: 'command',
+      to: 'battlefield',
+      rulesStrict,
+      phase,
+      playerId,
+      pendingActions,
+      isCommander: true,
+    })
+    return cast.allowed
+  }
+
+  // Battlefield: untapped permanent = tap-activation stand-in on your turn
+  if (zone === 'battlefield') {
+    if (!tapped) return true
+    return false
+  }
+
+  // Graveyard: only when a return/reanimate effect is queued
+  if (zone === 'graveyard') {
+    if (isCommander) {
+      const toCmd = checkZoneMove({
+        from: 'graveyard',
+        to: 'command',
+        rulesStrict,
+        phase,
+        playerId,
+        pendingActions,
+        isCommander: true,
+      })
+      if (toCmd.allowed) return true
+    }
+    return hasPending(['returnFromGy', 'putFromGy'])
+  }
+
+  // Exile: only with return-from-exile pending
+  if (zone === 'exile') {
+    return hasPending(['returnFromExile'])
+  }
+
+  // Library: top-access effects (glow applied to visible stack chips by caller)
+  if (zone === 'library') {
+    return hasPending([
+      'draw',
+      'mill',
+      'tutor',
+      'exileFromLibrary',
+      'putFromLibrary',
+    ])
+  }
+
+  return false
+}

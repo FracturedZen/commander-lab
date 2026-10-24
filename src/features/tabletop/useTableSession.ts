@@ -9,6 +9,7 @@ import {
   type Phase,
 } from '@/lib/rules/turnMachine'
 import {
+  cardCanActivate,
   checkZoneMove,
   legalDestinations,
   type PendingAction,
@@ -1033,6 +1034,39 @@ export function useTableSession() {
     pushLog(`AI: pass — ${action.reason}`)
   }, [aiLandsPlayed, aiMana, gameActive, moveCard, player, pushLog])
 
+  const isCardHighlighted = useCallback(
+    (
+      zone: ZoneName,
+      instance: CardInstance,
+      seatIndex = activeSeat,
+    ) => {
+      const seat = players[seatIndex]
+      if (!seat || !gameActive) return false
+      return cardCanActivate({
+        zone,
+        rulesStrict,
+        phase: turn.phase,
+        playerId: seat.id,
+        pendingActions,
+        isCommander: Boolean(instance.card.isCommander),
+        tapped: Boolean(instance.tapped),
+        isActivePlayer: seat.id === turn.activePlayerId,
+        gameActive,
+        mulliganOpen,
+      })
+    },
+    [
+      activeSeat,
+      gameActive,
+      mulliganOpen,
+      pendingActions,
+      players,
+      rulesStrict,
+      turn.activePlayerId,
+      turn.phase,
+    ],
+  )
+
   return {
     table,
     player,
@@ -1053,6 +1087,7 @@ export function useTableSession() {
     setRulesStrict,
     grantPendingAction,
     getLegalDestinations,
+    isCardHighlighted,
     setActiveSeat,
     setSeatCount,
     setSelectedInstance,

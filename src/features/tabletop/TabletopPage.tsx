@@ -1,11 +1,14 @@
 import { useEffect, useState, type DragEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { CardChip } from '@/components/CardChip'
+import { CardDetailOverlay } from '@/components/CardDetailOverlay'
+import { PhaseRail } from '@/components/PhaseRail'
+import { StackStub } from '@/components/StackStub'
 import { ZonePanel } from '@/components/ZonePanel'
-import { PHASE_LABEL } from '@/lib/rules/turnMachine'
 import { BackgroundControl } from './BackgroundControl'
 import { useTableSession } from './useTableSession'
 import { SAMPLE_DECK_DEFS } from '@/lib/sample-decks/install'
+import type { CardRef } from '@/types/card'
 import type { ZoneName } from '@/types/game'
 
 const MOVE_ZONES: ZoneName[] = [
@@ -37,6 +40,7 @@ export function TabletopPage() {
     rulesStrict,
     grantPendingAction,
     getLegalDestinations,
+    isCardHighlighted,
     adjustLife,
     adjustCommanderDamage,
     shuffleLibrary,
@@ -64,6 +68,7 @@ export function TabletopPage() {
   const [dragOverZone, setDragOverZone] = useState<ZoneName | null>(null)
   const [setupSeats, setSetupSeats] = useState(1)
   const [setupDecks, setSetupDecks] = useState<(string | null)[]>([null])
+  const [inspectCard, setInspectCard] = useState<CardRef | null>(null)
 
   useEffect(() => {
     setSetupDecks((prev) => {
@@ -125,49 +130,32 @@ export function TabletopPage() {
 
   const activeName =
     players.find((p) => p.id === turn.activePlayerId)?.name ?? 'Player'
-  const phaseLabel =
-    PHASE_LABEL[turn.phase] ?? String(turn.phase).replace(/_/g, ' ')
-
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-3 px-2 py-3 sm:px-4">
       {gameActive ? (
-        <div className="sticky top-0 z-20 -mx-2 flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/30 bg-slate-950/95 px-3 py-2 backdrop-blur sm:mx-0 sm:rounded-xl sm:border">
-          <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-wider text-emerald-400/80">
-              Active turn
-              {rulesStrict ? ' · strict draws' : ' · debug draws'}
+        <div className="sticky top-0 z-20 -mx-2 flex flex-col gap-2 border-b border-sky-500/25 bg-slate-950/95 px-2 py-2 backdrop-blur sm:mx-0 sm:rounded-xl sm:border sm:px-3">
+          <PhaseRail
+            phase={turn.phase}
+            turnNumber={turn.turnNumber}
+            activeName={activeName}
+            yourTurn={player.id === turn.activePlayerId}
+            lastAutoNote={turn.lastAutoNote}
+            onNextPhase={nextPhase}
+            onEndTurn={endTurn}
+          />
+          {player.hasLost && (
+            <p className="px-1 text-xs font-semibold text-rose-300">
+              {player.name} lost
+              {player.loseReason === 'decked'
+                ? ' — decked (drew from empty library)'
+                : player.loseReason === 'commander_damage'
+                  ? ' — 21 commander damage'
+                  : player.loseReason === 'life'
+                    ? ' — life ≤ 0'
+                    : ''}
             </p>
-            <p className="truncate text-lg font-bold text-white">
-              {activeName}
-              <span className="mx-2 text-slate-600">·</span>
-              <span className="text-emerald-300">{phaseLabel}</span>
-              <span className="ml-2 text-sm font-normal text-slate-400">
-                Turn {turn.turnNumber}
-              </span>
-            </p>
-            {turn.lastAutoNote && (
-              <p className="mt-0.5 truncate text-xs text-amber-200/90">
-                {turn.lastAutoNote}
-              </p>
-            )}
-            {player.hasLost && (
-              <p className="mt-0.5 text-xs font-semibold text-rose-300">
-                {player.name} lost
-                {player.loseReason === 'decked'
-                  ? ' — decked (drew from empty library)'
-                  : player.loseReason === 'commander_damage'
-                    ? ' — 21 commander damage'
-                    : player.loseReason === 'life'
-                      ? ' — life ≤ 0'
-                      : ''}
-              </p>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <ActionButton onClick={nextPhase}>Next phase</ActionButton>
-            <ActionButton onClick={endTurn} tone="accent">
-              End turn
-            </ActionButton>
+          )}
+          <div className="flex flex-wrap gap-2 px-1">
             {!rulesStrict && (
               <ActionButton onClick={() => draw(1)} title="Debug free draw">
                 Draw (debug)
@@ -190,12 +178,11 @@ export function TabletopPage() {
               End game
             </ActionButton>
           </div>
-          <p
-            className="w-full text-[10px] text-slate-500"
-            title="In multiplayer Commander everyone draws on each of their turns, including the first. Drawing is automatic on the draw step — not a free button."
-          >
-            Draws are automatic on the draw step. Zone moves need a legal action
-            or queued effect under strict rules — no free mill/tutor/top→hand.
+          <p className="w-full px-1 text-[10px] text-slate-500">
+            Cyan glow = legal play / tap / effect target. Long-press or{' '}
+            <span className="text-sky-300">i</span> for full card. Stack panel is
+            a stub (priority engine later).
+            {rulesStrict ? ' Strict zone rules on.' : ' Sandbox moves on.'}
           </p>
         </div>
       ) : (
@@ -445,12 +432,10 @@ export function TabletopPage() {
         </div>
       )}
 
-      {pendingActions.length > 0 && gameActive && (
-        <div className="rounded-lg border border-indigo-500/30 bg-indigo-950/40 px-3 py-2 text-[11px] text-indigo-100">
-          Active effects:{' '}
-          {pendingActions
-            .map((a) => `${a.label ?? a.type}×${a.count}`)
-            .join(' · ')}
+      {gameActive && (
+        <div className="grid gap-2 sm:grid-cols-[1fr_14rem]">
+          <div className="min-w-0" />
+          <StackStub pendingActions={pendingActions} />
         </div>
       )}
 
@@ -588,9 +573,12 @@ export function TabletopPage() {
                   <CardChip
                     key={c.instanceId}
                     card={c.card}
+                    size="command"
                     draggable
                     selected={selectedInstance?.instanceId === c.instanceId}
+                    highlighted={isCardHighlighted('command', c)}
                     onClick={() => onCardSelect('command', c.instanceId)}
+                    onInspect={() => setInspectCard(c.card)}
                     onDragStart={() =>
                       setSelectedInstance({
                         playerId: player.id,
@@ -598,7 +586,6 @@ export function TabletopPage() {
                         instanceId: c.instanceId,
                       })
                     }
-                    showImage
                   />
                 ))}
               </ZonePanel>
@@ -613,9 +600,12 @@ export function TabletopPage() {
                   <CardChip
                     key={c.instanceId}
                     card={c.card}
+                    size="tiny"
                     draggable
                     selected={selectedInstance?.instanceId === c.instanceId}
+                    highlighted={isCardHighlighted('graveyard', c)}
                     onClick={() => onCardSelect('graveyard', c.instanceId)}
+                    onInspect={() => setInspectCard(c.card)}
                     onDragStart={() =>
                       setSelectedInstance({
                         playerId: player.id,
@@ -637,9 +627,12 @@ export function TabletopPage() {
                   <CardChip
                     key={c.instanceId}
                     card={c.card}
+                    size="tiny"
                     draggable
                     selected={selectedInstance?.instanceId === c.instanceId}
+                    highlighted={isCardHighlighted('exile', c)}
                     onClick={() => onCardSelect('exile', c.instanceId)}
+                    onInspect={() => setInspectCard(c.card)}
                     onDragStart={() =>
                       setSelectedInstance({
                         playerId: player.id,
@@ -668,10 +661,13 @@ export function TabletopPage() {
                   <CardChip
                     key={c.instanceId}
                     card={c.card}
+                    size="board"
                     draggable
                     tapped={c.tapped}
                     selected={selectedInstance?.instanceId === c.instanceId}
+                    highlighted={isCardHighlighted('battlefield', c)}
                     onClick={() => onCardSelect('battlefield', c.instanceId)}
+                    onInspect={() => setInspectCard(c.card)}
                     onDragStart={() =>
                       setSelectedInstance({
                         playerId: player.id,
@@ -679,7 +675,6 @@ export function TabletopPage() {
                         instanceId: c.instanceId,
                       })
                     }
-                    showImage
                   />
                 ))
               )}
@@ -696,7 +691,13 @@ export function TabletopPage() {
                 <div className="flex w-full flex-col gap-1">
                   <div className="flex justify-center gap-0.5">
                     {player.zones.library.slice(0, 3).map((c) => (
-                      <CardChip key={c.instanceId} card={c.card} faceDown />
+                      <CardChip
+                        key={c.instanceId}
+                        card={c.card}
+                        size="tiny"
+                        faceDown
+                        highlighted={isCardHighlighted('library', c)}
+                      />
                     ))}
                   </div>
                   <div className="flex flex-col gap-0.5">
@@ -774,35 +775,57 @@ export function TabletopPage() {
               <ZonePanel
                 title="Hand"
                 count={player.zones.hand.length}
-                className="min-h-[6.5rem] bg-black/35"
+                className="min-h-[8.5rem] bg-black/35"
                 {...zoneHandlers('hand')}
               >
                 {player.zones.hand.length === 0 ? (
                   <p className="p-2 text-xs text-emerald-100/35">Hand empty</p>
                 ) : (
-                  player.zones.hand.map((c) => (
-                    <CardChip
-                      key={c.instanceId}
-                      card={c.card}
-                      draggable
-                      selected={selectedInstance?.instanceId === c.instanceId}
-                      onClick={() => onCardSelect('hand', c.instanceId)}
-                      onDragStart={() =>
-                        setSelectedInstance({
-                          playerId: player.id,
-                          zone: 'hand',
-                          instanceId: c.instanceId,
-                        })
-                      }
-                      showImage
-                    />
-                  ))
+                  <div className="hand-dock w-full">
+                    {player.zones.hand.map((c) => (
+                      <div
+                        key={c.instanceId}
+                        className={[
+                          'hand-dock__card',
+                          selectedInstance?.instanceId === c.instanceId
+                            ? 'is-selected'
+                            : '',
+                        ].join(' ')}
+                      >
+                        <CardChip
+                          card={c.card}
+                          size="hand"
+                          draggable
+                          selected={
+                            selectedInstance?.instanceId === c.instanceId
+                          }
+                          highlighted={isCardHighlighted('hand', c)}
+                          onClick={() => onCardSelect('hand', c.instanceId)}
+                          onInspect={() => setInspectCard(c.card)}
+                          onDragStart={() =>
+                            setSelectedInstance({
+                              playerId: player.id,
+                              zone: 'hand',
+                              instanceId: c.instanceId,
+                            })
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
                 )}
               </ZonePanel>
             </div>
           </div>
         )}
       </div>
+
+      {inspectCard && (
+        <CardDetailOverlay
+          card={inspectCard}
+          onClose={() => setInspectCard(null)}
+        />
+      )}
 
       <aside className="rounded-xl border border-slate-800 bg-slate-900/50 p-3">
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">

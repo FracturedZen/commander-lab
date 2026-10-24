@@ -49,3 +49,87 @@ textarea {
   user-select: none;
   touch-action: none;
 }
+
+/* MTG Arena–style soft cyan/white bloom for legal activations */
+.card-chip--activatable {
+  border-color: rgba(186, 230, 253, 0.85);
+  box-shadow:
+    0 0 0 1px rgba(224, 242, 254, 0.55),
+    0 0 10px 2px rgba(56, 189, 248, 0.55),
+    0 0 22px 4px rgba(125, 211, 252, 0.35),
+    0 4px 10px rgba(0, 0, 0, 0.45);
+  z-index: 1;
+}
+
+.card-chip--activatable-strong {
+  box-shadow:
+    0 0 0 2px rgba(240, 249, 255, 0.9),
+    0 0 14px 4px rgba(56, 189, 248, 0.75),
+    0 0 28px 8px rgba(186, 230, 253, 0.45),
+    0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-chip--activatable,
+  .card-chip--activatable-strong {
+    transition: none;
+    box-shadow:
+      0 0 0 2px rgba(186, 230, 253, 0.95),
+      0 0 8px 1px rgba(56, 189, 248, 0.4);
+  }
+}
+
+.card-chip--legal-cursor {
+  cursor: pointer;
+}
+
+.card-chip--legal-cursor:hover {
+  transform: translateY(-2px);
+}
+
+/* Bottom hand dock — Arena-like overlapping fan */
+.hand-dock {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  min-height: 8.5rem;
+  padding: 0.25rem 0.5rem 0.5rem;
+  perspective: 600px;
+}
+
+.hand-dock__card {
+  margin-left: -1.15rem;
+  transition: transform 0.15s ease, margin 0.15s ease, z-index 0s;
+  transform-origin: bottom center;
+}
+
+.hand-dock__card:first-child {
+  margin-left: 0;
+}
+
+.hand-dock__card:hover,
+.hand-dock__card:focus-within {
+  transform: translateY(-14px) scale(1.06);
+  z-index: 5;
+  margin-right: 0.35rem;
+}
+
+.hand-dock__card.is-selected {
+  transform: translateY(-18px) scale(1.08);
+  z-index: 6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hand-dock__card,
+  .hand-dock__card:hover,
+  .hand-dock__card:focus-within,
+  .hand-dock__card.is-selected,
+  .card-chip--legal-cursor:hover {
+    transition: none;
+    transform: none;
+  }
+}
+
+.phase-rail {
+  backdrop-filter: blur(8px);
+}
