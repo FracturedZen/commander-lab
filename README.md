@@ -21,6 +21,7 @@ Web-first PWA (React + TypeScript) for PC browsers and Android.
 Phone / GitHub Pages build:
 ```bash
 npm run build -- --base=/commander-lab/
+# postbuild copies dist/index.html → dist/404.html for SPA deep links on Pages
 ```
 
 ## Tech stack

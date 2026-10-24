@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test:rules": "npx --yes tsx scripts/moveLegality.selftest.ts",
     "test:goldfish": "echo \"Run Headless goldfish from /engine in the browser\"",
-    "test:phase-view": "npx --yes tsx scripts/phaseStateView.selftest.ts"
+    "test:phase-view": "npx --yes tsx scripts/phaseStateView.selftest.ts",
+    "postbuild": "cp dist/index.html dist/404.html"
   },
   "dependencies": {
     "idb": "^8.0.4",
