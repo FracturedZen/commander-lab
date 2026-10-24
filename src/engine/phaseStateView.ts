@@ -59,6 +59,8 @@ export type PhaseBoardView = {
   actionsByObject: Record<string, PhaseGameAction[]>
   flatActions: PhaseGameAction[]
   autoPass: boolean
+  /** Exact Phase mana-payment shortcut taps (TapLandForMana with one option). */
+  manaPaymentShortcutActions: PhaseGameAction[]
 }
 
 type RawObj = {
@@ -269,13 +271,19 @@ export function normalizeLegalActions(raw: PhaseLegalActions | unknown): {
   actions: PhaseGameAction[]
   actionsByObject: Record<string, PhaseGameAction[]>
   autoPass: boolean
+  manaPaymentShortcutActions: PhaseGameAction[]
 } {
   if (!raw || typeof raw !== 'object') {
-    return { actions: [], actionsByObject: {}, autoPass: false }
+    return { actions: [], actionsByObject: {}, autoPass: false, manaPaymentShortcutActions: [] }
   }
   const r = raw as Record<string, unknown>
   const actions = Array.isArray(r.actions) ? (r.actions as PhaseGameAction[]) : []
   const autoPass = Boolean(r.autoPassRecommended ?? r.auto_pass_recommended ?? r.auto_pass)
+  const manaPaymentShortcutActions = (
+    (Array.isArray(r.manaPaymentShortcutActions) && r.manaPaymentShortcutActions) ||
+    (Array.isArray(r.mana_payment_shortcut_actions) && r.mana_payment_shortcut_actions) ||
+    []
+  ) as PhaseGameAction[]
 
   const byObjRaw =
     (r.legalActionsByObject as Record<string, unknown[]> | undefined) ??
@@ -305,7 +313,7 @@ export function normalizeLegalActions(raw: PhaseLegalActions | unknown): {
     }
   }
 
-  return { actions, actionsByObject, autoPass }
+  return { actions, actionsByObject, autoPass, manaPaymentShortcutActions }
 }
 
 export function buildPhaseBoardView(
@@ -313,7 +321,7 @@ export function buildPhaseBoardView(
   legalRaw: PhaseLegalActions | unknown,
 ): PhaseBoardView {
   const state = unwrapPhaseState(stateRaw)
-  const { actions, actionsByObject, autoPass } = normalizeLegalActions(legalRaw)
+  const { actions, actionsByObject, autoPass, manaPaymentShortcutActions } = normalizeLegalActions(legalRaw)
 
   if (!state?.players || !state.objects) {
     return {
@@ -330,6 +338,7 @@ export function buildPhaseBoardView(
       actionsByObject,
       flatActions: actions,
       autoPass,
+      manaPaymentShortcutActions,
     }
   }
 
@@ -391,6 +400,7 @@ export function buildPhaseBoardView(
     actionsByObject,
     flatActions: actions,
     autoPass,
+    manaPaymentShortcutActions,
   }
 }
 

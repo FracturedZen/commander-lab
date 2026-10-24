@@ -118,8 +118,15 @@ import {
   nextSlotTargets,
   matchCastVariant,
   ensureAutoPayment,
+  applyPaymentPref,
   buildDeclareAttackersAction,
   findMulliganActions,
+  buildSelectCards,
+  buildSelectModes,
+  buildActivateManaSource,
+  derivedEngineStops,
+  discardReady,
+  manaTapObjectIds,
 } from '../src/engine/engineInteraction.ts'
 
 const waitAtk = parseWaitingFor({
@@ -181,5 +188,84 @@ const withWait = {
 const viewWait = buildPhaseBoardView(withWait, { actions: [] })
 assert(viewWait.waitingFor === 'DeclareAttackers', 'waitingFor type')
 assert(viewWait.waitingRaw && typeof viewWait.waitingRaw === 'object', 'waitingRaw present')
+
+// --- v0.6.3 mana / discard / mode WaitingFor ---
+const waitMana = parseWaitingFor({
+  type: 'ManaPayment',
+  data: { player: 0 },
+})
+assert(waitMana?.kind === 'ManaPayment', 'parse ManaPayment')
+
+const waitSac = parseWaitingFor({
+  type: 'ManaSourceSelection',
+  data: {
+    player: 0,
+    options: [{ source: { object_id: 9, incarnation: 1 }, mana_type: 'Green', penalty: { type: 'Sacrifice' }, taps_for_mana: [], restrictions: [] }],
+  },
+})
+assert(waitSac?.kind === 'ManaSourceSelection', 'parse ManaSourceSelection')
+if (waitSac?.kind === 'ManaSourceSelection') {
+  assert(waitSac.options.length === 1, 'sac options')
+  const act = buildActivateManaSource(waitSac.options[0])
+  assert(act.type === 'ActivateManaSource', 'activate mana source')
+}
+
+const waitDisc = parseWaitingFor({
+  type: 'DiscardChoice',
+  data: { player: 0, count: 2, cards: [1, 2, 3], source_id: 9, effect_kind: 'x' },
+})
+assert(waitDisc?.kind === 'Discard', 'parse DiscardChoice')
+if (waitDisc?.kind === 'Discard') {
+  assert(waitDisc.cards.join(',') === '1,2,3', 'discard cards')
+  assert(discardReady(waitDisc, ['1', '2']), 'discard ready exact')
+  assert(!discardReady(waitDisc, ['1']), 'discard not ready')
+  const sel = buildSelectCards(['1', '2'])
+  assert(sel.type === 'SelectCards', 'SelectCards')
+}
+
+const waitMode = parseWaitingFor({
+  type: 'ModeChoice',
+  data: {
+    player: 0,
+    modal: {
+      min_choices: 1,
+      max_choices: 1,
+      mode_count: 2,
+      mode_descriptions: ['Destroy target', 'Draw a card'],
+      allow_repeat_modes: false,
+    },
+  },
+})
+assert(waitMode?.kind === 'ModeChoice', 'parse ModeChoice')
+if (waitMode?.kind === 'ModeChoice') {
+  assert(waitMode.modeDescriptions.length === 2, 'mode descs')
+  assert(buildSelectModes([0]).type === 'SelectModes', 'SelectModes')
+}
+
+const manual = applyPaymentPref(
+  { type: 'CastSpell', data: { object_id: 1, card_id: 2, targets: [] } },
+  'Manual',
+)
+assert(
+  (manual.data as { payment_mode?: { type?: string } }).payment_mode?.type === 'Manual',
+  'manual stamp',
+)
+
+const stops = derivedEngineStops(waitMana, 'main1')
+assert(stops.has('main1'), 'rail stop main1 for mana')
+
+const tapMap = manaTapObjectIds({
+  '3': [{ type: 'TapLandForMana', data: { selection: { source: { object_id: 3 } } } }],
+  '4': [{ type: 'PlayLand', data: { object_id: 4 } }],
+})
+assert(tapMap.has('3') && !tapMap.has('4'), 'mana tap glow map')
+
+const withShortcuts = buildPhaseBoardView(wrapped, {
+  actions: [],
+  mana_payment_shortcut_actions: [
+    { type: 'TapLandForMana', data: { selection: { source: { object_id: 3, incarnation: 0 } } } },
+  ],
+})
+assert(withShortcuts.manaPaymentShortcutActions.length === 1, 'shortcuts on view')
 
 console.log('phaseStateView.selftest + engineInteraction: ok')

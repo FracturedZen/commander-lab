@@ -142,6 +142,26 @@ export function EnginePlayPage() {
     }
   }
 
+  /** Chain mana taps without AI between them (still Phase-legal only). */
+  const submitChain = async (actions: PhaseGameAction[]) => {
+    if (!actions.length) return
+    setBusy(true)
+    try {
+      for (const action of actions) {
+        adapter.submitAction(action, 0)
+        pushLog(`You: ${summarizeAction(action)}`)
+      }
+      const driven = adapter.driveOpponents({ maxSteps: 60 })
+      if (driven.steps) pushLog(`AI drove ${driven.steps} (${driven.stoppedReason})`)
+      await syncFromEngine()
+    } catch (err) {
+      pushLog(`Reject: ${err instanceof Error ? err.message : String(err)}`)
+      await syncFromEngine()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const driveAi = async () => {
     setBusy(true)
     try {
@@ -179,7 +199,7 @@ export function EnginePlayPage() {
         <div>
           <h1 className="text-lg font-semibold text-white">Phase Engine</h1>
           <p className="text-xs text-slate-400">
-            Arena board ← Phase state. Cyan = legal · rose = targets · orange = combat · amber = mana preview.
+            Arena board ← Phase state. Cyan = legal · rose = targets/discard · orange = combat · amber = mana. Pay: Auto / Manual / Sac-safe.
           </p>
         </div>
         <div className="flex gap-2">
@@ -279,6 +299,7 @@ export function EnginePlayPage() {
           view={board}
           busy={busy}
           onSubmit={(a) => void submit(a)}
+          onSubmitChain={(acts) => void submitChain(acts)}
           onDriveAi={() => void driveAi()}
           onPreviewMana={(a) => adapter.previewManaPayment(a, 0)}
         />

@@ -14,26 +14,45 @@ import {
   type PhaseObjectView,
 } from '@/engine/phaseStateView'
 import {
+  applyPaymentPref,
+  buildActivateManaSource,
   buildDeclareAttackersAction,
   buildDeclareBlockersAction,
   buildDeclareNoneAttackers,
   buildDeclareNoneBlockers,
-  ensureAutoPayment,
+  buildSelectCards,
+  buildSelectModes,
+  derivedEngineStops,
+  discardReady,
+  effectZoneReady,
+  findFlatAction,
   findMulliganActions,
   matchCastVariant,
+  modeChoiceReady,
+  manaTapObjectIds,
   needsTargetingWizard,
   nextSlotTargets,
   parseWaitingFor,
+  pickManaTapAction,
   pickUntargetedCast,
+  summarizeManaSourceOption,
+  type CastPaymentModeType,
   type WaitingCombatAttackers,
   type WaitingCombatBlockers,
   type WaitingDetail,
+  type WaitingDiscard,
+  type WaitingEffectZone,
+  type WaitingManaPayment,
+  type WaitingManaSourceSelection,
+  type WaitingModeChoice,
 } from '@/engine/engineInteraction'
 
 type Props = {
   view: PhaseBoardView
   busy: boolean
   onSubmit: (action: PhaseGameAction) => void
+  /** Submit several engine-legal actions without AI between them (mana shortcuts). */
+  onSubmitChain?: (actions: PhaseGameAction[]) => void
   onDriveAi: () => void
   /** Optional Auto-payment source preview (object ids). */
   onPreviewMana?: (action: PhaseGameAction) => string[]
@@ -52,6 +71,9 @@ type UiMode =
       kind: 'attackers'
       detail: WaitingCombatAttackers
       selected: string[]
+      /** When an attacker needs a target pick among multiple AttackTargets. */
+      pendingAttacker: string | null
+      attackTargets: Record<string, import('@/engine/engineInteraction').AttackTarget>
     }
   | {
       kind: 'blockers'
@@ -59,6 +81,11 @@ type UiMode =
       pendingBlocker: string | null
       assignments: Array<[string, string]>
     }
+  | { kind: 'manaPay'; detail: WaitingManaPayment }
+  | { kind: 'manaSource'; detail: WaitingManaSourceSelection }
+  | { kind: 'discard'; detail: WaitingDiscard; selected: string[] }
+  | { kind: 'modeChoice'; detail: WaitingModeChoice; selected: number[] }
+  | { kind: 'effectZone'; detail: WaitingEffectZone; selected: string[] }
 
 function LifeBadge({
   life,
@@ -86,7 +113,20 @@ function LifeBadge({
   )
 }
 
-export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: Props) {
+const PAY_LABEL: Record<CastPaymentModeType, string> = {
+  Auto: 'Auto',
+  Manual: 'Manual',
+  AutoExceptSacrificialMana: 'Sac-safe',
+}
+
+export function EngineBoard({
+  view,
+  busy,
+  onSubmit,
+  onSubmitChain,
+  onDriveAi,
+  onPreviewMana,
+}: Props) {
   const you = view.seats[0]
   const opp = view.seats[1]
   const [inspect, setInspect] = useState<PhaseObjectView | null>(null)
@@ -98,6 +138,7 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
   const [showAllActions, setShowAllActions] = useState(false)
   const [mode, setMode] = useState<UiMode>({ kind: 'idle' })
   const [manaGlow, setManaGlow] = useState<Set<string>>(() => new Set())
+  const [paymentPref, setPaymentPref] = useState<CastPaymentModeType>('Auto')
 
   const waitingDetail: WaitingDetail = useMemo(
     () => parseWaitingFor(view.waitingRaw ?? view.waitingFor),
@@ -109,35 +150,90 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
     [view.actionsByObject],
   )
 
+  const manaTapGlow = useMemo(
+    () => manaTapObjectIds(view.actionsByObject),
+    [view.actionsByObject],
+  )
+
   const passAction = view.flatActions.find((a) => a.type === 'PassPriority')
-  const canPass = Boolean(passAction) && mode.kind === 'idle'
+  const cancelCast = findFlatAction(view.flatActions, 'CancelCast')
+  const backToMana = findFlatAction(view.flatActions, 'BackToManaPayment')
+  const canPass =
+    Boolean(passAction) &&
+    (mode.kind === 'idle' || mode.kind === 'manaPay')
   const mulliganActs = useMemo(
     () => findMulliganActions(view.flatActions),
     [view.flatActions],
   )
 
-  // Auto-enter combat modes from engine waiting_for (viewer seat 0).
+  const railStops = useMemo(
+    () => derivedEngineStops(waitingDetail, view.phase),
+    [waitingDetail, view.phase],
+  )
+
+  // Auto-enter engine-driven choice modes from waiting_for (viewer seat 0).
   useEffect(() => {
-    if (waitingDetail?.kind === 'DeclareAttackers' && waitingDetail.player === 0) {
-      const detail = waitingDetail
-      setMode({ kind: 'attackers', detail, selected: [] })
+    const w = waitingDetail
+    if (w?.kind === 'DeclareAttackers' && w.player === 0) {
+      setMode({
+        kind: 'attackers',
+        detail: w,
+        selected: [],
+        pendingAttacker: null,
+        attackTargets: {},
+      })
       setPicker(null)
       return
     }
-    if (waitingDetail?.kind === 'DeclareBlockers' && waitingDetail.player === 0) {
-      const detail = waitingDetail
+    if (w?.kind === 'DeclareBlockers' && w.player === 0) {
       setMode({
         kind: 'blockers',
-        detail,
+        detail: w,
         pendingBlocker: null,
         assignments: [],
       })
       setPicker(null)
       return
     }
-    setMode((m) =>
-      m.kind === 'attackers' || m.kind === 'blockers' ? { kind: 'idle' } : m,
-    )
+    if (w?.kind === 'ManaPayment' && w.player === 0) {
+      setMode({ kind: 'manaPay', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'ManaSourceSelection' && w.player === 0) {
+      setMode({ kind: 'manaSource', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'Discard' && w.player === 0) {
+      setMode({ kind: 'discard', detail: w, selected: [] })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'ModeChoice' && w.player === 0) {
+      setMode({ kind: 'modeChoice', detail: w, selected: [] })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'EffectZoneChoice' && w.player === 0) {
+      setMode({ kind: 'effectZone', detail: w, selected: [] })
+      setPicker(null)
+      return
+    }
+    setMode((m) => {
+      if (
+        m.kind === 'attackers' ||
+        m.kind === 'blockers' ||
+        m.kind === 'manaPay' ||
+        m.kind === 'manaSource' ||
+        m.kind === 'discard' ||
+        m.kind === 'modeChoice' ||
+        m.kind === 'effectZone'
+      ) {
+        return { kind: 'idle' }
+      }
+      return m
+    })
   }, [waitingDetail])
 
   // Clear targeting when legal actions refresh out from under us
@@ -153,7 +249,10 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
   }, [mode])
 
   const combatGlow = useMemo(() => {
-    if (mode.kind === 'attackers') return new Set(mode.detail.validAttackerIds)
+    if (mode.kind === 'attackers') {
+      if (mode.pendingAttacker) return new Set<string>() // player targets via banner
+      return new Set(mode.detail.validAttackerIds)
+    }
     if (mode.kind === 'blockers') {
       if (mode.pendingBlocker) {
         return new Set(mode.detail.validBlockTargets[mode.pendingBlocker] ?? [])
@@ -162,6 +261,13 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
     }
     return new Set<string>()
   }, [mode])
+
+  const choiceGlow = useMemo(() => {
+    if (mode.kind === 'discard') return new Set(mode.detail.cards)
+    if (mode.kind === 'effectZone') return new Set(mode.detail.cards)
+    if (mode.kind === 'manaPay' || mode.kind === 'manaSource') return manaTapGlow
+    return new Set<string>()
+  }, [mode, manaTapGlow])
 
   const selectedIds = useMemo(() => {
     if (mode.kind === 'targeting') return new Set(mode.selected)
@@ -174,6 +280,9 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
       }
       if (mode.pendingBlocker) s.add(mode.pendingBlocker)
       return s
+    }
+    if (mode.kind === 'discard' || mode.kind === 'effectZone') {
+      return new Set(mode.selected)
     }
     return new Set<string>()
   }, [mode])
@@ -209,6 +318,22 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
       }
       return { highlighted: false, glow: 'legal', selected: false }
     }
+    if (mode.kind === 'discard' || mode.kind === 'effectZone') {
+      if (choiceGlow.has(objectId) || selectedIds.has(objectId)) {
+        return {
+          highlighted: true,
+          glow: 'target',
+          selected: selectedIds.has(objectId),
+        }
+      }
+      return { highlighted: false, glow: 'legal', selected: false }
+    }
+    if (mode.kind === 'manaPay' || mode.kind === 'manaSource') {
+      if (choiceGlow.has(objectId)) {
+        return { highlighted: true, glow: 'mana', selected: false }
+      }
+      return { highlighted: false, glow: 'legal', selected: false }
+    }
     return {
       highlighted: glowing.has(objectId),
       glow: 'legal',
@@ -217,8 +342,8 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
   }
 
   function submitWithManaPreview(action: PhaseGameAction) {
-    const paid = ensureAutoPayment(action)
-    if (onPreviewMana) {
+    const paid = applyPaymentPref(action, paymentPref)
+    if (onPreviewMana && paymentPref !== 'Manual') {
       try {
         const ids = onPreviewMana(paid)
         if (ids.length) {
@@ -237,7 +362,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
   function onCardTap(card: PhaseObjectView) {
     if (busy) return
 
-    // Targeting wizard: pick next target
     if (mode.kind === 'targeting') {
       if (!targetGlow.has(card.objectId)) {
         if (card.objectId === mode.objectId) return
@@ -252,7 +376,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
       }
       const more = nextSlotTargets(mode.variants, next)
       if (more.length === 0) {
-        // Dead end — reset selection but keep wizard
         setMode({ ...mode, selected: [] })
         return
       }
@@ -260,10 +383,27 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
       return
     }
 
-    // Declare attackers: toggle
     if (mode.kind === 'attackers') {
+      if (mode.pendingAttacker) {
+        setInspect(card)
+        return
+      }
       if (!mode.detail.validAttackerIds.includes(card.objectId)) {
         setInspect(card)
+        return
+      }
+      const targets =
+        mode.detail.validAttackTargetsByAttacker?.[card.objectId] ??
+        mode.detail.validAttackTargets
+      if (targets.length > 1 && !mode.selected.includes(card.objectId)) {
+        // Multi-target: select attacker then pick target in banner
+        setMode({
+          ...mode,
+          pendingAttacker: card.objectId,
+          selected: mode.selected.includes(card.objectId)
+            ? mode.selected
+            : [...mode.selected, card.objectId],
+        })
         return
       }
       setMode({
@@ -275,7 +415,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
       return
     }
 
-    // Declare blockers: pick blocker then attacker
     if (mode.kind === 'blockers') {
       if (!mode.pendingBlocker) {
         if (!mode.detail.validBlockerIds.includes(card.objectId)) {
@@ -287,7 +426,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
       }
       const legal = mode.detail.validBlockTargets[mode.pendingBlocker] ?? []
       if (!legal.includes(card.objectId)) {
-        // Retap same blocker to cancel, or pick another blocker
         if (mode.detail.validBlockerIds.includes(card.objectId)) {
           setMode({ ...mode, pendingBlocker: card.objectId })
           return
@@ -301,10 +439,89 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
       return
     }
 
+    if (mode.kind === 'manaPay') {
+      const acts = view.actionsByObject[card.objectId] ?? []
+      const pick = pickManaTapAction(acts)
+      if (pick === 'ambiguous') {
+        setPicker({
+          objectId: card.objectId,
+          name: card.card.name,
+          actions: acts.filter(
+            (a) => a.type === 'TapLandForMana' || a.type === 'ActivateManaSource',
+          ),
+        })
+        return
+      }
+      if (pick) {
+        onSubmit(pick)
+        return
+      }
+      setInspect(card)
+      return
+    }
+
+    if (mode.kind === 'manaSource') {
+      // Prefer board tap if legal; otherwise inspect (options are in banner)
+      const acts = view.actionsByObject[card.objectId] ?? []
+      const pick = pickManaTapAction(acts)
+      if (pick && pick !== 'ambiguous') {
+        onSubmit(pick)
+        return
+      }
+      if (pick === 'ambiguous') {
+        setPicker({
+          objectId: card.objectId,
+          name: card.card.name,
+          actions: acts.filter(
+            (a) => a.type === 'TapLandForMana' || a.type === 'ActivateManaSource',
+          ),
+        })
+        return
+      }
+      setInspect(card)
+      return
+    }
+
+    if (mode.kind === 'discard' || mode.kind === 'effectZone') {
+      if (!mode.detail.cards.includes(card.objectId)) {
+        setInspect(card)
+        return
+      }
+      const selected = mode.selected.includes(card.objectId)
+        ? mode.selected.filter((id) => id !== card.objectId)
+        : [...mode.selected, card.objectId]
+      // Cap exact-count selections
+      if (
+        !mode.detail.upTo &&
+        selected.length > mode.detail.count &&
+        !mode.selected.includes(card.objectId)
+      ) {
+        return
+      }
+      if (
+        mode.detail.upTo &&
+        selected.length > mode.detail.count &&
+        !mode.selected.includes(card.objectId)
+      ) {
+        return
+      }
+      setMode({ ...mode, selected })
+      return
+    }
+
+    if (mode.kind === 'modeChoice') {
+      setInspect(card)
+      return
+    }
+
     const acts = view.actionsByObject[card.objectId]
     if (acts && acts.length > 0) {
       const untargeted = pickUntargetedCast(acts)
-      if (untargeted && acts.filter((a) => a.type === untargeted.type).length === 1 && acts.length === 1) {
+      if (
+        untargeted &&
+        acts.filter((a) => a.type === untargeted.type).length === 1 &&
+        acts.length === 1
+      ) {
         submitWithManaPreview(untargeted)
         return
       }
@@ -324,11 +541,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
         return
       }
       const primary = pickPrimaryAction(acts)
-      if (primary && !needsTargetingWizard([primary]) && acts.every((a) => a.type === primary.type) === false) {
-        // Mixed types — picker
-        setPicker({ objectId: card.objectId, name: card.card.name, actions: acts })
-        return
-      }
       setPicker({
         objectId: card.objectId,
         name: card.card.name,
@@ -346,6 +558,23 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
 
   function confirmAttackers() {
     if (mode.kind !== 'attackers') return
+    // Apply per-attacker target overrides when present
+    if (Object.keys(mode.attackTargets).length > 0 && mode.selected.length > 0) {
+      const attacks: Array<[number, import('@/engine/engineInteraction').AttackTarget]> = []
+      for (const id of mode.selected) {
+        const t =
+          mode.attackTargets[id] ??
+          (mode.detail.validAttackTargetsByAttacker?.[id] ??
+            mode.detail.validAttackTargets)[0]
+        if (!t) return
+        const n = Number(id)
+        if (!Number.isFinite(n)) return
+        attacks.push([n, t])
+      }
+      setMode({ kind: 'idle' })
+      onSubmit({ type: 'DeclareAttackers', data: { attacks, bands: [] } })
+      return
+    }
     const action =
       mode.selected.length === 0
         ? buildDeclareNoneAttackers()
@@ -365,6 +594,36 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
     onSubmit(action)
   }
 
+  function confirmDiscard() {
+    if (mode.kind !== 'discard') return
+    if (!discardReady(mode.detail, mode.selected)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildSelectCards(mode.selected))
+  }
+
+  function confirmEffectZone() {
+    if (mode.kind !== 'effectZone') return
+    if (!effectZoneReady(mode.detail, mode.selected)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildSelectCards(mode.selected))
+  }
+
+  function confirmModes() {
+    if (mode.kind !== 'modeChoice') return
+    if (!modeChoiceReady(mode.detail, mode.selected)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildSelectModes(mode.selected))
+  }
+
+  function runManaShortcuts() {
+    const acts = view.manaPaymentShortcutActions ?? []
+    if (acts.length === 0) return
+    if (onSubmitChain) onSubmitChain(acts)
+    else {
+      for (const a of acts) onSubmit(a)
+    }
+  }
+
   if (!view.ok || !you) {
     return (
       <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 p-3 text-sm text-amber-100">
@@ -373,6 +632,38 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
     )
   }
 
+  const paymentBar = (
+    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-300">
+      <span className="text-slate-500">Pay:</span>
+      {(['Auto', 'Manual', 'AutoExceptSacrificialMana'] as CastPaymentModeType[]).map(
+        (m) => (
+          <button
+            key={m}
+            type="button"
+            disabled={busy || mode.kind === 'manaPay'}
+            onClick={() => setPaymentPref(m)}
+            className={[
+              'rounded px-2 py-0.5 font-medium',
+              paymentPref === m
+                ? 'bg-amber-600/90 text-white'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700',
+              'disabled:opacity-40',
+            ].join(' ')}
+            title={
+              m === 'Auto'
+                ? 'Engine auto-taps payment (default)'
+                : m === 'Manual'
+                  ? 'Cast then tap paying permanents yourself'
+                  : 'Auto until a sacrifice-mana source — then pick'
+            }
+          >
+            {PAY_LABEL[m]}
+          </button>
+        ),
+      )}
+    </div>
+  )
+
   const modeBanner =
     mode.kind === 'targeting' ? (
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-400/40 bg-rose-950/50 px-3 py-2 text-sm text-rose-50">
@@ -380,6 +671,7 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
           Choose target{mode.selected.length ? `s (${mode.selected.length})` : ''} for{' '}
           <strong>{mode.sourceName}</strong>
           {targetGlow.size ? ` · ${targetGlow.size} legal` : ''}
+          <span className="ml-2 text-rose-200/70">({PAY_LABEL[paymentPref]} pay)</span>
         </span>
         <button
           type="button"
@@ -390,18 +682,64 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
         </button>
       </div>
     ) : mode.kind === 'attackers' ? (
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
-        <span>
-          Declare attackers · tap creatures ({mode.selected.length} selected)
-        </span>
-        <button
-          type="button"
-          disabled={busy}
-          className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
-          onClick={confirmAttackers}
-        >
-          {mode.selected.length === 0 ? 'Declare none' : `Attack (${mode.selected.length})`}
-        </button>
+      <div className="flex flex-col gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
+        <div className="flex flex-wrap items-center gap-2">
+          <span>
+            Declare attackers · tap creatures ({mode.selected.length} selected)
+            {mode.pendingAttacker ? ' · pick attack target' : ''}
+          </span>
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
+            onClick={confirmAttackers}
+          >
+            {mode.selected.length === 0
+              ? 'Declare none'
+              : `Attack (${mode.selected.length})`}
+          </button>
+        </div>
+        {mode.pendingAttacker && (
+          <div className="flex flex-wrap gap-1">
+            {(
+              mode.detail.validAttackTargetsByAttacker?.[mode.pendingAttacker] ??
+              mode.detail.validAttackTargets
+            ).map((t, i) => (
+              <button
+                key={i}
+                type="button"
+                className="rounded bg-orange-800/80 px-2 py-1 text-xs hover:bg-orange-700"
+                onClick={() => {
+                  const id = mode.pendingAttacker!
+                  setMode({
+                    ...mode,
+                    pendingAttacker: null,
+                    attackTargets: { ...mode.attackTargets, [id]: t },
+                    selected: mode.selected.includes(id)
+                      ? mode.selected
+                      : [...mode.selected, id],
+                  })
+                }}
+              >
+                {t.type}
+                {typeof t.data === 'number' ? ` ${t.data}` : ''}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="rounded bg-slate-700 px-2 py-1 text-xs"
+              onClick={() =>
+                setMode({
+                  ...mode,
+                  pendingAttacker: null,
+                  selected: mode.selected.filter((id) => id !== mode.pendingAttacker),
+                })
+              }
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
     ) : mode.kind === 'blockers' ? (
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
@@ -416,7 +754,9 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
           className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
           onClick={confirmBlockers}
         >
-          {mode.assignments.length === 0 ? 'Declare none' : `Confirm blocks (${mode.assignments.length})`}
+          {mode.assignments.length === 0
+            ? 'Declare none'
+            : `Confirm blocks (${mode.assignments.length})`}
         </button>
         {mode.pendingBlocker && (
           <button
@@ -428,7 +768,167 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
           </button>
         )}
       </div>
-    ) : waitingDetail?.kind === 'MulliganDecision' && (mulliganActs.keep || mulliganActs.mulligan) ? (
+    ) : mode.kind === 'manaPay' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-950/50 px-3 py-2 text-sm text-amber-50">
+        <span>
+          Pay mana · tap glowing sources
+          {manaTapGlow.size ? ` (${manaTapGlow.size})` : ''}
+        </span>
+        {(view.manaPaymentShortcutActions?.length ?? 0) > 0 && (
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-amber-700 px-2 py-1 text-xs font-semibold disabled:opacity-40"
+            onClick={runManaShortcuts}
+            title="Tap each land that has exactly one TapLandForMana option"
+          >
+            Tap simple ({view.manaPaymentShortcutActions!.length})
+          </button>
+        )}
+        {passAction && (
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+            onClick={() => onSubmit(passAction)}
+          >
+            Confirm pay
+          </button>
+        )}
+        {cancelCast && (
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
+            onClick={() => onSubmit(cancelCast)}
+          >
+            Cancel cast
+          </button>
+        )}
+      </div>
+    ) : mode.kind === 'manaSource' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-amber-400/40 bg-amber-950/50 px-3 py-2 text-sm text-amber-50">
+        <span>Sacrifice / special mana source — pick an engine option:</span>
+        <div className="flex max-h-40 flex-col gap-1 overflow-auto">
+          {mode.detail.options.map((opt, i) => (
+            <button
+              key={i}
+              type="button"
+              disabled={busy}
+              className="rounded border border-amber-700/60 bg-amber-950/80 px-2 py-1.5 text-left text-xs hover:border-amber-400 disabled:opacity-40"
+              onClick={() => {
+                setMode({ kind: 'idle' })
+                onSubmit(buildActivateManaSource(opt))
+              }}
+            >
+              {summarizeManaSourceOption(opt, i)}
+            </button>
+          ))}
+        </div>
+        {backToMana && (
+          <button
+            type="button"
+            disabled={busy}
+            className="self-start rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
+            onClick={() => onSubmit(backToMana)}
+          >
+            Back to mana payment
+          </button>
+        )}
+      </div>
+    ) : mode.kind === 'discard' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-400/40 bg-rose-950/50 px-3 py-2 text-sm text-rose-50">
+        <span>
+          Discard {mode.detail.upTo ? `up to ${mode.detail.count}` : mode.detail.count} ·{' '}
+          {mode.selected.length} selected
+        </span>
+        <button
+          type="button"
+          disabled={busy || !discardReady(mode.detail, mode.selected)}
+          className="rounded bg-rose-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmDiscard}
+        >
+          Confirm discard
+        </button>
+      </div>
+    ) : mode.kind === 'effectZone' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-400/40 bg-violet-950/50 px-3 py-2 text-sm text-violet-50">
+        <span>
+          Choose {mode.detail.upTo ? `up to ${mode.detail.count}` : mode.detail.count}
+          {mode.detail.zone ? ` from ${mode.detail.zone}` : ''} · {mode.selected.length}{' '}
+          selected
+        </span>
+        <button
+          type="button"
+          disabled={busy || !effectZoneReady(mode.detail, mode.selected)}
+          className="rounded bg-violet-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmEffectZone}
+        >
+          Confirm
+        </button>
+      </div>
+    ) : mode.kind === 'modeChoice' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-sky-400/40 bg-sky-950/50 px-3 py-2 text-sm text-sky-50">
+        <span>
+          Choose mode{mode.detail.maxChoices > 1 ? 's' : ''} ({mode.detail.minChoices}
+          {mode.detail.maxChoices !== mode.detail.minChoices
+            ? `–${mode.detail.maxChoices}`
+            : ''}
+          )
+        </span>
+        <div className="flex max-h-48 flex-col gap-1 overflow-auto">
+          {mode.detail.modeDescriptions.map((desc, index) => {
+            const blocked = mode.detail.unavailableModes.includes(index)
+            const on = mode.selected.includes(index)
+            return (
+              <button
+                key={index}
+                type="button"
+                disabled={busy || blocked}
+                className={[
+                  'rounded border px-2 py-1.5 text-left text-xs disabled:opacity-40',
+                  on
+                    ? 'border-sky-400 bg-sky-900/80'
+                    : 'border-sky-800/60 bg-sky-950/60 hover:border-sky-500',
+                ].join(' ')}
+                onClick={() => {
+                  if (mode.detail.maxChoices <= 1) {
+                    setMode({ ...mode, selected: [index] })
+                    return
+                  }
+                  if (on) {
+                    setMode({
+                      ...mode,
+                      selected: mode.selected.filter((i) => i !== index),
+                    })
+                    return
+                  }
+                  if (
+                    !mode.detail.allowRepeat &&
+                    mode.selected.length >= mode.detail.maxChoices
+                  ) {
+                    return
+                  }
+                  setMode({ ...mode, selected: [...mode.selected, index] })
+                }}
+              >
+                {index + 1}. {desc || `(mode ${index + 1})`}
+                {blocked ? ' (unavailable)' : ''}
+              </button>
+            )
+          })}
+        </div>
+        <button
+          type="button"
+          disabled={busy || !modeChoiceReady(mode.detail, mode.selected)}
+          className="self-start rounded bg-sky-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmModes}
+        >
+          Confirm modes
+        </button>
+      </div>
+    ) : waitingDetail?.kind === 'MulliganDecision' &&
+      (mulliganActs.keep || mulliganActs.mulligan) ? (
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-400/40 bg-violet-950/50 px-3 py-2 text-sm text-violet-50">
         <span>Opening hand — keep or mulligan?</span>
         {mulliganActs.keep && (
@@ -454,7 +954,10 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
       </div>
     ) : null
 
-  function renderChip(c: PhaseObjectView, size: 'board' | 'boardLg' | 'land' | 'hand' | 'command' | 'tiny') {
+  function renderChip(
+    c: PhaseObjectView,
+    size: 'board' | 'boardLg' | 'land' | 'hand' | 'command' | 'tiny',
+  ) {
     const g = chipGlow(c.objectId)
     return (
       <CardChip
@@ -489,7 +992,7 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
               ? 'engine recommends pass'
               : null
         }
-        stops={new Set()}
+        stops={railStops}
         combatEntered={
           view.phase.startsWith('combat') ||
           waitingDetail?.kind === 'DeclareAttackers' ||
@@ -501,14 +1004,17 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
           waitingDetail?.kind === 'DeclareBlockers'
         }
         onPass={() => {
-          if (passAction && mode.kind === 'idle') onSubmit(passAction)
+          if (passAction && (mode.kind === 'idle' || mode.kind === 'manaPay')) {
+            onSubmit(passAction)
+          }
         }}
         onToggleStop={() => {
-          /* engine owns phases — stops are display-only here */
+          /* display-only stops from engine WaitingFor — no client authority */
         }}
         dock
       />
 
+      {paymentBar}
       {modeBanner}
 
       <div
@@ -521,7 +1027,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
         }}
       >
         <div className="relative flex min-h-[28rem] flex-col gap-2 p-2 sm:p-3">
-          {/* Opponent */}
           {opp && (
             <div className="flex flex-wrap items-center justify-center gap-3">
               <div className="rounded-lg border border-white/10 bg-black/35 px-3 py-1 text-center text-[11px] text-emerald-100/80">
@@ -531,7 +1036,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
                   H{opp.hand.length} · L{opp.libraryCount}
                 </div>
               </div>
-              {/* Face-down hand stubs */}
               {opp.hand.length > 0 && (
                 <div className="flex max-w-[12rem] flex-wrap justify-center gap-0.5">
                   {Array.from({ length: Math.min(opp.hand.length, 10) }).map((_, i) => (
@@ -563,7 +1067,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
 
           <div className="combat-lane mx-4 h-px bg-gradient-to-r from-transparent via-rose-400/50 to-transparent" />
 
-          {/* Your BF */}
           <div className="min-h-[8rem] flex-1 rounded-xl border border-emerald-400/15 bg-black/20 p-2">
             <div className="mb-1 flex items-center justify-between px-1">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-100/45">
@@ -575,7 +1078,8 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
             </div>
             {you.nonLands.length === 0 ? (
               <p className="p-3 text-center text-xs text-emerald-100/30">
-                Empty — cyan = legal · rose = target · orange = combat
+                Empty — cyan = legal · rose = target/discard · orange = combat · amber =
+                mana
               </p>
             ) : (
               <div className="flex flex-wrap content-start items-end gap-2">
@@ -584,7 +1088,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
             )}
           </div>
 
-          {/* Lands */}
           <div className="rounded-xl border border-emerald-400/10 bg-black/25 px-2 py-1.5">
             <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-emerald-100/40">
               Lands
@@ -598,7 +1101,6 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
             )}
           </div>
 
-          {/* Bottom: life + piles + hand */}
           <div className="mt-auto grid grid-cols-[auto_1fr] items-end gap-2 sm:grid-cols-[auto_1fr_auto]">
             <div className="flex flex-col items-center gap-1">
               <LifeBadge
@@ -638,14 +1140,17 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
           </div>
         </div>
 
-        {/* Big Pass FAB */}
         <button
           type="button"
           disabled={busy || !canPass}
-          onClick={() => passAction && mode.kind === 'idle' && onSubmit(passAction)}
+          onClick={() =>
+            passAction &&
+            (mode.kind === 'idle' || mode.kind === 'manaPay') &&
+            onSubmit(passAction)
+          }
           className="absolute bottom-3 right-3 z-20 rounded-full bg-gradient-to-b from-sky-400 to-sky-700 px-5 py-3 text-sm font-bold uppercase tracking-wide text-white shadow-xl shadow-sky-900/50 ring-2 ring-white/30 disabled:opacity-40"
         >
-          Pass
+          {mode.kind === 'manaPay' ? 'Confirm' : 'Pass'}
         </button>
       </div>
 
@@ -693,7 +1198,7 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
         </div>
       )}
 
-      {picker && mode.kind === 'idle' && (
+      {picker && (
         <div
           className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 p-3 sm:items-center"
           onClick={() => setPicker(null)}
@@ -713,8 +1218,16 @@ export function EngineBoard({ view, busy, onSubmit, onDriveAi, onPreviewMana }: 
                   disabled={busy}
                   onClick={() => {
                     setPicker(null)
+                    if (
+                      mode.kind === 'manaPay' ||
+                      mode.kind === 'manaSource' ||
+                      a.type === 'TapLandForMana' ||
+                      a.type === 'ActivateManaSource'
+                    ) {
+                      onSubmit(a)
+                      return
+                    }
                     if (needsTargetingWizard([a]) || needsTargetingWizard(picker.actions)) {
-                      // Prefer wizard over raw list when targets differ
                       if (needsTargetingWizard(picker.actions)) {
                         setMode({
                           kind: 'targeting',

@@ -1,9 +1,11 @@
 /**
- * Display-layer helpers for Arena-like targeting / combat on Engine.
+ * Display-layer helpers for Arena-like targeting / combat / mana / choices on Engine.
  * All legality still comes from Phase legal actions / waiting_for payloads.
  */
 
 import type { PhaseGameAction } from './types'
+import type { Phase as LabPhase, RailSegmentId } from '@/lib/rules/turnMachine'
+import { phaseToRailSegment } from '@/lib/rules/turnMachine'
 
 export type AttackTarget =
   | { type: 'Player'; data: number }
@@ -32,6 +34,50 @@ export type WaitingMulligan = {
   freeFirstMulligan?: boolean
 }
 
+export type WaitingManaPayment = {
+  kind: 'ManaPayment'
+  player: number
+  convokeMode?: unknown
+}
+
+export type WaitingManaSourceSelection = {
+  kind: 'ManaSourceSelection'
+  player: number
+  /** Exact Phase ManaSourceSelection rows — submit ActivateManaSource as-is. */
+  options: unknown[]
+  convokeMode?: unknown
+}
+
+export type WaitingDiscard = {
+  kind: 'Discard'
+  type: 'DiscardChoice' | 'DiscardToHandSize' | 'WardDiscardChoice'
+  player: number
+  count: number
+  cards: string[]
+  upTo: boolean
+}
+
+export type WaitingModeChoice = {
+  kind: 'ModeChoice'
+  type: 'ModeChoice' | 'AbilityModeChoice'
+  player: number
+  minChoices: number
+  maxChoices: number
+  modeDescriptions: string[]
+  allowRepeat: boolean
+  unavailableModes: number[]
+}
+
+export type WaitingEffectZone = {
+  kind: 'EffectZoneChoice'
+  player: number
+  cards: string[]
+  count: number
+  minCount: number
+  upTo: boolean
+  zone?: string
+}
+
 export type WaitingOther = {
   kind: 'Other'
   type: string
@@ -42,8 +88,15 @@ export type WaitingDetail =
   | WaitingCombatAttackers
   | WaitingCombatBlockers
   | WaitingMulligan
+  | WaitingManaPayment
+  | WaitingManaSourceSelection
+  | WaitingDiscard
+  | WaitingModeChoice
+  | WaitingEffectZone
   | WaitingOther
   | null
+
+export type CastPaymentModeType = 'Auto' | 'Manual' | 'AutoExceptSacrificialMana'
 
 const CAST_FAMILY = new Set([
   'CastSpell',
@@ -54,6 +107,8 @@ const CAST_FAMILY = new Set([
   'CastSpellAsMadness',
 ])
 
+const MANA_TAP_TYPES = new Set(['TapLandForMana', 'ActivateManaSource'])
+
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : null
 }
@@ -63,6 +118,11 @@ function idStr(v: unknown): string | null {
   return null
 }
 
+function numIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map(idStr).filter((x): x is string => x != null)
+}
+
 export function parseWaitingFor(raw: unknown): WaitingDetail {
   if (!raw) return null
   if (typeof raw === 'string') return { kind: 'Other', type: raw }
@@ -70,15 +130,12 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
   if (!r || typeof r.type !== 'string') return null
   const data = asRecord(r.data) ?? r
   const type = r.type
+  const player = typeof data.player === 'number' ? data.player : 0
 
   if (type === 'DeclareAttackers') {
-    const validAttackerIds = (
-      (data.valid_attacker_ids as unknown[]) ??
-      (data.validAttackerIds as unknown[]) ??
-      []
+    const validAttackerIds = numIds(
+      data.valid_attacker_ids ?? data.validAttackerIds ?? [],
     )
-      .map(idStr)
-      .filter((x): x is string => x != null)
     const validAttackTargets = (
       (data.valid_attack_targets as AttackTarget[]) ??
       (data.validAttackTargets as AttackTarget[]) ??
@@ -96,7 +153,7 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
     }
     return {
       kind: 'DeclareAttackers',
-      player: typeof data.player === 'number' ? data.player : 0,
+      player,
       validAttackerIds,
       validAttackTargets,
       validAttackTargetsByAttacker,
@@ -104,13 +161,9 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
   }
 
   if (type === 'DeclareBlockers') {
-    const validBlockerIds = (
-      (data.valid_blocker_ids as unknown[]) ??
-      (data.validBlockerIds as unknown[]) ??
-      []
+    const validBlockerIds = numIds(
+      data.valid_blocker_ids ?? data.validBlockerIds ?? [],
     )
-      .map(idStr)
-      .filter((x): x is string => x != null)
     const rawMap =
       (data.valid_block_targets as Record<string, unknown>) ??
       (data.validBlockTargets as Record<string, unknown>) ??
@@ -122,7 +175,7 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
     }
     return {
       kind: 'DeclareBlockers',
-      player: typeof data.player === 'number' ? data.player : 0,
+      player,
       validBlockerIds,
       validBlockTargets,
     }
@@ -137,6 +190,110 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
     }
   }
 
+  if (
+    type === 'ManaPayment' ||
+    type === 'ManaAbilityManaPayment' ||
+    type === 'PhyrexianPayment'
+  ) {
+    // Phyrexian still uses pool/choice panel elsewhere; treat as mana-pay window
+    // so board glow + Pass/Cancel work. Per-shard Phyrexian UI remains stub → action list.
+    return {
+      kind: 'ManaPayment',
+      player: typeof data.player === 'number' ? data.player : player,
+      convokeMode: data.convoke_mode ?? data.convokeMode,
+    }
+  }
+
+  if (type === 'ManaSourceSelection') {
+    const options = Array.isArray(data.options) ? data.options : []
+    return {
+      kind: 'ManaSourceSelection',
+      player,
+      options,
+      convokeMode: data.convoke_mode ?? data.convokeMode,
+    }
+  }
+
+  if (
+    type === 'DiscardChoice' ||
+    type === 'DiscardToHandSize' ||
+    type === 'WardDiscardChoice'
+  ) {
+    const cards = numIds(data.cards ?? [])
+    const count =
+      typeof data.count === 'number'
+        ? data.count
+        : typeof data.remaining === 'number'
+          ? data.remaining
+          : 1
+    return {
+      kind: 'Discard',
+      type,
+      player,
+      count,
+      cards,
+      upTo: Boolean(data.up_to ?? data.upTo),
+    }
+  }
+
+  if (type === 'ModeChoice' || type === 'AbilityModeChoice') {
+    const modal = asRecord(data.modal) ?? {}
+    const descs = Array.isArray(modal.mode_descriptions)
+      ? (modal.mode_descriptions as unknown[]).map(String)
+      : Array.isArray(modal.modeDescriptions)
+        ? (modal.modeDescriptions as unknown[]).map(String)
+        : []
+    const unavailable = Array.isArray(data.unavailable_modes)
+      ? (data.unavailable_modes as unknown[])
+          .map((n) => (typeof n === 'number' ? n : Number(n)))
+          .filter((n) => Number.isFinite(n))
+      : Array.isArray(data.unavailableModes)
+        ? (data.unavailableModes as unknown[])
+            .map((n) => (typeof n === 'number' ? n : Number(n)))
+            .filter((n) => Number.isFinite(n))
+        : []
+    return {
+      kind: 'ModeChoice',
+      type,
+      player,
+      minChoices:
+        typeof modal.min_choices === 'number'
+          ? modal.min_choices
+          : typeof modal.minChoices === 'number'
+            ? modal.minChoices
+            : 1,
+      maxChoices:
+        typeof modal.max_choices === 'number'
+          ? modal.max_choices
+          : typeof modal.maxChoices === 'number'
+            ? modal.maxChoices
+            : Math.max(1, descs.length || 1),
+      modeDescriptions: descs,
+      allowRepeat: Boolean(modal.allow_repeat_modes ?? modal.allowRepeatModes),
+      unavailableModes: unavailable,
+    }
+  }
+
+  if (type === 'EffectZoneChoice') {
+    const cards = numIds(data.cards ?? [])
+    const count = typeof data.count === 'number' ? data.count : 1
+    const minCount =
+      typeof data.min_count === 'number'
+        ? data.min_count
+        : typeof data.minCount === 'number'
+          ? data.minCount
+          : 0
+    return {
+      kind: 'EffectZoneChoice',
+      player,
+      cards,
+      count,
+      minCount,
+      upTo: Boolean(data.up_to ?? data.upTo),
+      zone: typeof data.zone === 'string' ? data.zone : undefined,
+    }
+  }
+
   return {
     kind: 'Other',
     type,
@@ -146,6 +303,19 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
 
 export function isCastFamily(a: PhaseGameAction): boolean {
   return CAST_FAMILY.has(a.type)
+}
+
+export function isManaTapAction(a: PhaseGameAction): boolean {
+  return MANA_TAP_TYPES.has(a.type)
+}
+
+/** Object id a TapLandForMana / ActivateManaSource taps, if present. */
+export function manaTapObjectId(a: PhaseGameAction): string | null {
+  if (!isManaTapAction(a)) return null
+  const d = asRecord(a.data)
+  const sel = asRecord(d?.selection)
+  const source = asRecord(sel?.source)
+  return idStr(source?.object_id ?? source?.objectId ?? sel?.source)
 }
 
 export function actionTargets(a: PhaseGameAction): string[] {
@@ -160,7 +330,6 @@ export function actionTargets(a: PhaseGameAction): string[] {
 export function needsTargetingWizard(actions: PhaseGameAction[]): boolean {
   const casts = actions.filter(isCastFamily)
   if (casts.length < 2) {
-    // Single cast with non-empty targets still needs a confirm glow path
     if (casts.length === 1 && actionTargets(casts[0]!).length > 0) return true
     return false
   }
@@ -213,7 +382,6 @@ export function matchCastVariant(
     return t.every((x, i) => x === selected[i])
   })
   if (hits.length === 0) return null
-  // Prefer Auto / omitted payment_mode
   const auto = hits.find((a) => {
     const d = asRecord(a.data)
     const pm = asRecord(d?.payment_mode)
@@ -222,16 +390,33 @@ export function matchCastVariant(
   return auto ?? hits[0] ?? null
 }
 
+export function stampPaymentMode(
+  action: PhaseGameAction,
+  mode: CastPaymentModeType,
+): PhaseGameAction {
+  if (!isCastFamily(action) && action.type !== 'ActivateAbility') return action
+  const d = asRecord(action.data) ?? {}
+  return {
+    ...action,
+    data: { ...d, payment_mode: { type: mode } },
+  }
+}
+
 export function ensureAutoPayment(action: PhaseGameAction): PhaseGameAction {
   if (!isCastFamily(action) && action.type !== 'ActivateAbility') return action
   const d = asRecord(action.data) ?? {}
   const pm = asRecord(d.payment_mode)
   if (pm?.type === 'Manual') return action
   if (pm?.type === 'Auto' || pm?.type === 'AutoExceptSacrificialMana') return action
-  return {
-    ...action,
-    data: { ...d, payment_mode: { type: 'Auto' } },
-  }
+  return stampPaymentMode(action, 'Auto')
+}
+
+export function applyPaymentPref(
+  action: PhaseGameAction,
+  pref: CastPaymentModeType,
+): PhaseGameAction {
+  if (!isCastFamily(action) && action.type !== 'ActivateAbility') return action
+  return stampPaymentMode(action, pref)
 }
 
 export function attackTargetsFor(
@@ -305,4 +490,124 @@ export function pickUntargetedCast(actions: PhaseGameAction[]): PhaseGameAction 
   const casts = actions.filter(isCastFamily)
   const empty = casts.find((a) => actionTargets(a).length === 0)
   return empty ? ensureAutoPayment(empty) : null
+}
+
+/** Object ids that currently offer a mana-tap action. */
+export function manaTapObjectIds(
+  actionsByObject: Record<string, PhaseGameAction[]>,
+): Set<string> {
+  const set = new Set<string>()
+  for (const [oid, list] of Object.entries(actionsByObject)) {
+    if (list.some(isManaTapAction)) set.add(oid)
+  }
+  return set
+}
+
+/**
+ * Pick a single mana-tap action for an object.
+ * Returns null when multiple distinct selections exist (open picker).
+ */
+export function pickManaTapAction(
+  actions: PhaseGameAction[],
+): PhaseGameAction | 'ambiguous' | null {
+  const taps = actions.filter(isManaTapAction)
+  if (taps.length === 0) return null
+  if (taps.length === 1) return taps[0]!
+  return 'ambiguous'
+}
+
+export function buildActivateManaSource(selection: unknown): PhaseGameAction {
+  return { type: 'ActivateManaSource', data: { selection } }
+}
+
+export function buildSelectCards(cardIds: string[]): PhaseGameAction {
+  return {
+    type: 'SelectCards',
+    data: { cards: cardIds.map((id) => Number(id)).filter((n) => Number.isFinite(n)) },
+  }
+}
+
+export function buildSelectModes(indices: number[]): PhaseGameAction {
+  return { type: 'SelectModes', data: { indices } }
+}
+
+export function findFlatAction(
+  actions: PhaseGameAction[],
+  type: string,
+): PhaseGameAction | undefined {
+  return actions.find((a) => a.type === type)
+}
+
+/** Display-only rail stops from real engine WaitingFor choice points. */
+export function derivedEngineStops(
+  waiting: WaitingDetail,
+  phase: LabPhase,
+): Set<RailSegmentId> {
+  const stops = new Set<RailSegmentId>()
+  if (!waiting) return stops
+  const seg = phaseToRailSegment(phase)
+  switch (waiting.kind) {
+    case 'DeclareAttackers':
+    case 'DeclareBlockers':
+      stops.add('combat')
+      break
+    case 'MulliganDecision':
+      stops.add('beg')
+      break
+    case 'ManaPayment':
+    case 'ManaSourceSelection':
+    case 'Discard':
+    case 'ModeChoice':
+    case 'EffectZoneChoice':
+      stops.add(seg)
+      break
+    case 'Other':
+      // Mark current segment when engine is waiting on something unknown
+      if (waiting.type && waiting.type !== 'Priority') stops.add(seg)
+      break
+    default:
+      break
+  }
+  return stops
+}
+
+export function discardReady(
+  detail: WaitingDiscard,
+  selected: string[],
+): boolean {
+  if (detail.upTo) return selected.length <= detail.count
+  return selected.length === detail.count
+}
+
+export function effectZoneReady(
+  detail: WaitingEffectZone,
+  selected: string[],
+): boolean {
+  if (detail.upTo) {
+    return selected.length >= detail.minCount && selected.length <= detail.count
+  }
+  return selected.length === detail.count
+}
+
+export function modeChoiceReady(
+  detail: WaitingModeChoice,
+  selected: number[],
+): boolean {
+  const n = selected.length
+  return n >= detail.minChoices && n <= detail.maxChoices
+}
+
+/** Label a ManaSourceSelection option without inventing fields. */
+export function summarizeManaSourceOption(selection: unknown, index: number): string {
+  const sel = asRecord(selection)
+  if (!sel) return `Source option ${index + 1}`
+  const source = asRecord(sel.source)
+  const oid = idStr(source?.object_id ?? source?.objectId) ?? '?'
+  const manaType = sel.mana_type ?? sel.manaType
+  const penalty = asRecord(sel.penalty)
+  const penType = typeof penalty?.type === 'string' ? penalty.type : null
+  const bits = [`#${oid}`]
+  if (typeof manaType === 'string') bits.push(manaType)
+  if (penType && penType !== 'None') bits.push(penType)
+  return bits.join(' · ')
 }

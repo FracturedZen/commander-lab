@@ -30,10 +30,13 @@ export {
   parseWaitingFor,
   needsTargetingWizard,
   ensureAutoPayment,
+  applyPaymentPref,
+  stampPaymentMode,
   buildDeclareAttackersAction,
   buildDeclareNoneAttackers,
   buildDeclareBlockersAction,
   buildDeclareNoneBlockers,
   findMulliganActions,
+  derivedEngineStops,
 } from './engineInteraction'
-export type { WaitingDetail } from './engineInteraction'
+export type { WaitingDetail, CastPaymentModeType } from './engineInteraction'
