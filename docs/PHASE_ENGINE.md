@@ -93,16 +93,19 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `cardDataCache.ts` | meta fetch + IndexedDB |
 | `deckMap.ts` | Lab decks → Phase name-only `DeckList` |
 | `headlessGoldfish.ts` | N-step AI vs AI without UI |
+| `phaseStateView.ts` | ClientGameState → Arena board view + art hydrate |
 | `config.ts` | `ENGINE_MODE`, CDN URLs |
 | `phase-worker.js` | optional Web Worker protocol (public/) |
+| `../features/engine/EngineBoard.tsx` | Arena board (art chips, Pass, glow → submit) |
 
-## How to play the spike
+## How to play (v0.6.1+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** (first time: ~39 MB WASM + ~96 MB card-data).
 3. Pick two decks (samples install automatically) → **Start vs AI**.
-4. Only listed legal actions are clickable; **Pass priority** / **Drive AI** as needed.
-5. **Headless goldfish** runs Krenko vs Aesi with Phase Medium AI until turn/step limit.
+4. Arena-style board reflects Phase zones (hand fan, BF art chips, lands, command, life). Cyan glow = objects with legal actions — tap to submit (or pick when multiple). **Pass** FAB / rail submits `PassPriority`. **AI step** drives opponents. **Show all actions** is the fallback list.
+5. No free DnD on this page — only engine-legal submits.
+6. **Headless goldfish** runs stub basics decks with Phase Medium AI until turn/step limit.
 
 ## Headless / AI
 
@@ -110,8 +113,9 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) before 
 
 ## Limits & next work
 
-- Full Arena-style art board still on Legacy table; Engine page is legal-action list UI (spike).
-- Map Engine state → existing tabletop components for art-first play.
+- Engine board maps Phase state → art chips; mana payment shortcuts / multi-target wizards still use the action list / picker (not full Arena targeting UX).
+- Phase rail stops are display-only in engine mode (engine owns phase advances).
+- Mulligan / special decisions may need the action list when not object-scoped.
 - Lazy-load / compress card-data further; optional Worker boot path.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.
 - Local `build-wasm.sh` may take a long time on the box; CDN path is the supported deploy path.

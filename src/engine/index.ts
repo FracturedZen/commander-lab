@@ -14,3 +14,14 @@ export type { GoldfishResult } from './headlessGoldfish'
 export type * from './types'
 export { MockEngine } from './MockEngine'
 export { goldfishStubDecks, sanitizePhasePlayer } from './goldfishDecks'
+
+export {
+  buildPhaseBoardView,
+  hydrateBoardArt,
+  unwrapPhaseState,
+  normalizeLegalActions,
+  mapPhaseStepToLab,
+  summarizeAction,
+  pickPrimaryAction,
+} from './phaseStateView'
+export type { PhaseBoardView, PhaseObjectView, PhaseSeatView } from './phaseStateView'

@@ -48,6 +48,10 @@ export type PhaseGameAction = { type: string; data?: unknown }
 export type PhaseLegalActions = {
   actions: PhaseGameAction[]
   auto_pass?: boolean
+  autoPassRecommended?: boolean
+  /** objectId → ObjectActionPayload[] (flattened GameAction + interactionActionId) */
+  legalActionsByObject?: Record<string, unknown[]>
+  legal_actions_by_object?: Record<string, unknown[]>
   [key: string]: unknown
 }
 

@@ -31,6 +31,16 @@ function unwrapInit(raw: unknown): unknown {
   return raw
 }
 
+
+function unwrapStateEnvelope(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object') return {}
+  const r = raw as { state?: Record<string, unknown> }
+  if (r.state && typeof r.state === 'object') {
+    return { ...r.state, derived: (raw as { derived?: unknown }).derived ?? r.state.derived }
+  }
+  return raw as Record<string, unknown>
+}
+
 function unwrapAction(raw: unknown): PhaseSubmitResult {
   if (typeof raw === 'string') throw new Error(raw)
   if (!raw || typeof raw !== 'object') return { result: raw }
@@ -125,8 +135,21 @@ export class PhaseAdapter {
     if (!this.wasm) throw new Error('Phase not booted')
     const raw = this.wasm.get_legal_actions_for_viewer_js(viewerId)
     if (!raw || typeof raw !== 'object') return { actions: [] }
-    const r = raw as PhaseLegalActions
-    return { ...r, actions: Array.isArray(r.actions) ? r.actions : [] }
+    const r = raw as PhaseLegalActions & Record<string, unknown>
+    const actions = Array.isArray(r.actions) ? r.actions : []
+    const auto =
+      r.auto_pass ??
+      r.autoPassRecommended ??
+      r.auto_pass_recommended
+    const byObj =
+      r.legalActionsByObject ??
+      r.legal_actions_by_object
+    return {
+      ...r,
+      actions,
+      auto_pass: Boolean(auto),
+      legalActionsByObject: byObj as PhaseLegalActions['legalActionsByObject'],
+    }
   }
 
   submitAction(action: PhaseGameAction, actor: number = this.viewerId): PhaseSubmitResult {
@@ -167,26 +190,27 @@ export class PhaseAdapter {
     let steps = 0
 
     while (steps < maxSteps) {
-      const state = this.getState(humanId) as {
-        game_over?: boolean
-        priority?: number
-        active_player?: number
-        players?: unknown[]
-      }
-      if (state?.game_over) return { steps, stoppedReason: 'game_over' }
+      const state = unwrapStateEnvelope(this.getState(humanId))
+      if (state.game_over) return { steps, stoppedReason: 'game_over' }
 
       const legal = this.getLegalActions(humanId)
       // If human has meaningful choices beyond auto-pass, stop.
       const humanActions = legal.actions ?? []
+      const autoPass = Boolean(
+        legal.auto_pass ??
+          (legal as { autoPassRecommended?: boolean }).autoPassRecommended ??
+          (legal as { auto_pass_recommended?: boolean }).auto_pass_recommended,
+      )
       const onlyPass =
         humanActions.length === 0 ||
         (humanActions.length === 1 && humanActions[0]?.type === 'PassPriority') ||
-        legal.auto_pass === true
+        autoPass
 
-      const priority = (state as { priority_player?: number }).priority_player
-        ?? state.priority
-        ?? state.active_player
-        ?? 0
+      const priority =
+        (typeof state.priority_player === 'number' ? state.priority_player : undefined) ??
+        (typeof state.priority === 'number' ? state.priority : undefined) ??
+        (typeof state.active_player === 'number' ? state.active_player : undefined) ??
+        0
 
       if (priority === humanId && !onlyPass && humanActions.length > 0) {
         return { steps, stoppedReason: 'human_to_act' }
