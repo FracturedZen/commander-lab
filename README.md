@@ -2,7 +2,7 @@
 
 Offline-first **Commander (EDH)** digital tabletop, deck builder, bulk testing, and AI coaching app.
 
-**v0.3.0** — Scryfall gzipped-JSONL sync fix, two bundled starter decks, Start-game tabletop with automatic turn tracking.
+**v0.4.0** — Strict MTG draw/turn rules (auto-draw on draw step), plain-English Stats, pendingDraws hook, decked loss.
 
 Web-first PWA (React + TypeScript) for PC browsers and Android.
 

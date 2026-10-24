@@ -18,11 +18,12 @@ export function StatsPage() {
   const [keepMax, setKeepMax] = useState(5)
   const [result, setResult] = useState<GoldfishResult | null>(null)
 
-  // Hypergeometric inputs
-  const [N, setN] = useState(99)
-  const [K, setK] = useState(10)
-  const [n, setNDraw] = useState(7)
-  const [k, setKWant] = useState(1)
+  // Plain-language inputs (same math as before)
+  const [librarySize, setLibrarySize] = useState(99)
+  const [copiesInDeck, setCopiesInDeck] = useState(10)
+  const [cardsDrawn, setCardsDrawn] = useState(7)
+  const [wantAtLeast, setWantAtLeast] = useState(1)
+  const [showMath, setShowMath] = useState(false)
 
   useEffect(() => {
     void listDecks().then((rows) => {
@@ -36,16 +37,26 @@ export function StatsPage() {
   useEffect(() => {
     if (!deck) return
     const lib = expandDeckCards(deck.cards)
-    setN(lib.length || 99)
-    setK(lib.filter((c) => isLand(c)).length)
+    setLibrarySize(lib.length || 99)
+    setCopiesInDeck(lib.filter((c) => isLand(c)).length)
   }, [deck])
 
-  const hyper = useMemo(() => {
+  const odds = useMemo(() => {
     return {
-      exact: hypergeometricExact(N, K, n, k),
-      atLeast: hypergeometricAtLeast(N, K, n, k),
+      exact: hypergeometricExact(
+        librarySize,
+        copiesInDeck,
+        cardsDrawn,
+        wantAtLeast,
+      ),
+      atLeast: hypergeometricAtLeast(
+        librarySize,
+        copiesInDeck,
+        cardsDrawn,
+        wantAtLeast,
+      ),
     }
-  }, [N, K, n, k])
+  }, [librarySize, copiesInDeck, cardsDrawn, wantAtLeast])
 
   function onGoldfish() {
     if (!deck) return
@@ -57,18 +68,24 @@ export function StatsPage() {
     setResult(r)
   }
 
+  const cardWord = wantAtLeast === 1 ? 'card' : 'cards'
+  const copiesWord =
+    copiesInDeck === 1 ? '1 copy' : `${copiesInDeck} copies`
+
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-4">
       <div>
-        <h1 className="text-xl font-semibold text-white">Bulk testing & stats</h1>
+        <h1 className="text-xl font-semibold text-white">
+          Bulk testing &amp; stats
+        </h1>
         <p className="text-sm text-slate-400">
-          Fully offline on local deck data — hypergeometric draw odds and Monte Carlo
-          opening-hand goldfish.
+          Check opening-hand odds and mana consistency on this device — no
+          internet needed once your deck is saved.
         </p>
       </div>
 
       <label className="flex flex-col gap-1 text-xs text-slate-400">
-        Deck
+        Which deck?
         <select
           value={deckId}
           onChange={(e) => setDeckId(e.target.value)}
@@ -85,35 +102,98 @@ export function StatsPage() {
       </label>
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-        <h2 className="text-sm font-semibold text-slate-200">Hypergeometric draw odds</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Population N, K successes in deck, draw n, want at least k (defaults: lands in
-          opening hand).
+        <h2 className="text-sm font-semibold text-slate-200">
+          Odds of seeing certain cards
+        </h2>
+        <p className="mt-1 text-xs text-slate-400">
+          Defaults fill in with land count from the selected deck. Change the
+          numbers to test tutors, rocks, or anything else you care about.
         </p>
+
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <NumField label="N (deck)" value={N} onChange={setN} />
-          <NumField label="K (successes)" value={K} onChange={setK} />
-          <NumField label="n (draw)" value={n} onChange={setNDraw} />
-          <NumField label="k (want ≥)" value={k} onChange={setKWant} />
-        </div>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          <StatCard
-            label={`P(exactly ${k})`}
-            value={pct(hyper.exact)}
+          <NumField
+            label="Cards in library"
+            value={librarySize}
+            onChange={setLibrarySize}
           />
-          <StatCard
-            label={`P(at least ${k})`}
-            value={pct(hyper.atLeast)}
+          <NumField
+            label="Copies you’re looking for"
+            value={copiesInDeck}
+            onChange={setCopiesInDeck}
+          />
+          <NumField
+            label="Cards you draw"
+            value={cardsDrawn}
+            onChange={setCardsDrawn}
+          />
+          <NumField
+            label="How many you want (at least)"
+            value={wantAtLeast}
+            onChange={setWantAtLeast}
           />
         </div>
+
+        <div className="mt-4 space-y-3 rounded-lg border border-emerald-800/40 bg-emerald-950/30 p-3">
+          <p className="text-sm leading-relaxed text-emerald-50">
+            Odds of seeing <strong>at least {wantAtLeast}</strong> of those{' '}
+            {cardWord} in a draw of <strong>{cardsDrawn}</strong>, from a{' '}
+            <strong>{librarySize}</strong>-card library that has{' '}
+            <strong>{copiesWord}</strong>:{' '}
+            <span className="text-xl font-bold tabular-nums text-emerald-300">
+              {pct(odds.atLeast)}
+            </span>
+          </p>
+          <p className="text-sm text-slate-300">
+            Odds of seeing <strong>exactly {wantAtLeast}</strong>:{' '}
+            <span className="font-semibold tabular-nums text-emerald-200">
+              {pct(odds.exact)}
+            </span>
+          </p>
+        </div>
+
+        <details
+          className="mt-3 text-xs text-slate-500"
+          open={showMath}
+          onToggle={(e) => setShowMath((e.target as HTMLDetailsElement).open)}
+        >
+          <summary className="cursor-pointer text-slate-400 hover:text-slate-300">
+            Show math
+          </summary>
+          <p className="mt-2 leading-relaxed">
+            This uses the hypergeometric distribution: population size{' '}
+            <code className="text-slate-400">N={librarySize}</code>, successes
+            in the deck <code className="text-slate-400">K={copiesInDeck}</code>
+            , draws <code className="text-slate-400">n={cardsDrawn}</code>,
+            wanting <code className="text-slate-400">k≥{wantAtLeast}</code>.
+            Same numbers as above — just the textbook labels.
+          </p>
+        </details>
       </section>
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-        <h2 className="text-sm font-semibold text-slate-200">Goldfish / Monte Carlo</h2>
+        <h2 className="text-sm font-semibold text-slate-200">
+          Opening-hand goldfish
+        </h2>
+        <p className="mt-1 text-xs text-slate-400">
+          Shuffle thousands of opening hands and see how often you’d keep them
+          based on land count. Good for “does this mana base feel consistent?”
+        </p>
         <div className="mt-3 grid grid-cols-3 gap-3">
-          <NumField label="Iterations" value={iterations} onChange={setIterations} />
-          <NumField label="Keep lands ≥" value={keepMin} onChange={setKeepMin} />
-          <NumField label="Keep lands ≤" value={keepMax} onChange={setKeepMax} />
+          <NumField
+            label="Hands to simulate"
+            value={iterations}
+            onChange={setIterations}
+          />
+          <NumField
+            label="Keep if lands ≥"
+            value={keepMin}
+            onChange={setKeepMin}
+          />
+          <NumField
+            label="Keep if lands ≤"
+            value={keepMax}
+            onChange={setKeepMax}
+          />
         </div>
         <button
           type="button"
@@ -121,45 +201,91 @@ export function StatsPage() {
           onClick={onGoldfish}
           className="mt-3 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
         >
-          Run goldfish
+          Run opening-hand test
         </button>
 
         {result && (
           <div className="mt-4 space-y-4">
+            <div className="space-y-2 rounded-lg border border-emerald-800/40 bg-emerald-950/30 p-3 text-sm text-emerald-50">
+              <p>
+                About{' '}
+                <strong className="text-xl tabular-nums text-emerald-300">
+                  {pct(result.keepRate)}
+                </strong>{' '}
+                of opening hands had{' '}
+                <strong>
+                  {keepMin}–{keepMax} lands
+                </strong>{' '}
+                (your keep range) across {result.iterations.toLocaleString()}{' '}
+                shuffles.
+              </p>
+              <p className="text-slate-300">
+                On average you saw{' '}
+                <strong className="tabular-nums text-emerald-200">
+                  {result.avgLandsInOpener.toFixed(1)}
+                </strong>{' '}
+                lands in the opener. Non-land spells in hand averaged mana value{' '}
+                <strong className="tabular-nums text-emerald-200">
+                  {result.avgCmcNonLandInHand.toFixed(1)}
+                </strong>
+                .
+              </p>
+            </div>
+
             <div className="grid gap-2 sm:grid-cols-3">
               <StatCard
-                label="Avg lands in opener"
+                label="Average lands in opener"
                 value={result.avgLandsInOpener.toFixed(2)}
               />
               <StatCard
-                label={`Keep rate (${keepMin}–${keepMax} lands)`}
+                label={`Hands you’d keep (${keepMin}–${keepMax} lands)`}
                 value={pct(result.keepRate)}
               />
               <StatCard
-                label="Avg CMC non-lands in hand"
+                label="Avg mana value of non-lands in hand"
                 value={result.avgCmcNonLandInHand.toFixed(2)}
               />
             </div>
 
             <div>
-              <h3 className="mb-2 text-xs uppercase tracking-wider text-slate-500">
-                Land count distribution ({result.iterations} hands)
+              <h3 className="mb-1 text-xs font-medium text-slate-300">
+                How many lands showed up?
               </h3>
+              <p className="mb-2 text-[11px] text-slate-500">
+                Share of the {result.iterations.toLocaleString()} test hands with
+                each land count.
+              </p>
               <BarTable
                 data={result.landDistribution}
                 total={result.iterations}
+                formatLabel={(n) =>
+                  n === 1 ? '1 land' : `${n} lands`
+                }
               />
             </div>
 
             <div>
-              <h3 className="mb-2 text-xs uppercase tracking-wider text-slate-500">
-                Mana curve (non-lands in 99)
+              <h3 className="mb-1 text-xs font-medium text-slate-300">
+                Mana curve (non-lands in the 99)
               </h3>
-              <BarTable data={result.manaCurve} total={Object.values(result.manaCurve).reduce((a, b) => a + b, 0) || 1} labelPrefix="MV " />
+              <p className="mb-2 text-[11px] text-slate-500">
+                How expensive your spells are — not a hand simulation, just the
+                deck list.
+              </p>
+              <BarTable
+                data={result.manaCurve}
+                total={
+                  Object.values(result.manaCurve).reduce((a, b) => a + b, 0) ||
+                  1
+                }
+                formatLabel={(n) =>
+                  n >= 7 ? 'MV 7+' : `Mana value ${n}`
+                }
+              />
             </div>
 
             <div>
-              <h3 className="mb-2 text-xs uppercase tracking-wider text-slate-500">
+              <h3 className="mb-2 text-xs font-medium text-slate-300">
                 Sample hands
               </h3>
               <ul className="space-y-2 text-xs text-slate-400">
@@ -168,8 +294,11 @@ export function StatsPage() {
                     key={i}
                     className="rounded border border-slate-800 bg-slate-950/50 p-2"
                   >
-                    <span className={h.kept ? 'text-emerald-300' : 'text-rose-300'}>
-                      {h.kept ? 'KEEP' : 'MULL'} · {h.lands} lands
+                    <span
+                      className={h.kept ? 'text-emerald-300' : 'text-rose-300'}
+                    >
+                      {h.kept ? 'Would keep' : 'Would mulligan'} · {h.lands}{' '}
+                      {h.lands === 1 ? 'land' : 'lands'}
                     </span>
                     <p className="mt-1 text-slate-500">{h.names.join(' · ')}</p>
                   </li>
@@ -209,7 +338,9 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3">
       <p className="text-[11px] text-slate-500">{label}</p>
-      <p className="text-xl font-semibold tabular-nums text-emerald-300">{value}</p>
+      <p className="text-xl font-semibold tabular-nums text-emerald-300">
+        {value}
+      </p>
     </div>
   )
 }
@@ -217,11 +348,11 @@ function StatCard({ label, value }: { label: string; value: string }) {
 function BarTable({
   data,
   total,
-  labelPrefix = '',
+  formatLabel,
 }: {
   data: Record<number, number>
   total: number
-  labelPrefix?: string
+  formatLabel: (n: number) => string
 }) {
   const keys = Object.keys(data)
     .map(Number)
@@ -234,8 +365,8 @@ function BarTable({
         const width = (count / max) * 100
         return (
           <div key={key} className="flex items-center gap-2 text-xs">
-            <span className="w-12 tabular-nums text-slate-400">
-              {labelPrefix}{key}{key >= 7 && labelPrefix ? '+' : ''}
+            <span className="w-28 shrink-0 text-slate-400">
+              {formatLabel(key)}
             </span>
             <div className="h-3 flex-1 overflow-hidden rounded bg-slate-800">
               <div
@@ -244,7 +375,7 @@ function BarTable({
               />
             </div>
             <span className="w-16 text-right tabular-nums text-slate-500">
-              {count} ({pct(count / total, 0)})
+              {pct(count / total, 0)}
             </span>
           </div>
         )

@@ -20,6 +20,8 @@ export const SETTINGS_KEYS = {
   openRouterApiKey: 'openrouter.apiKey',
   openRouterModel: 'openrouter.model',
   defaultSeatCount: 'table.seatCount',
+  /** When true (default), free Draw is disabled; auto-draw on draw step only. */
+  rulesStrict: 'rules.strict',
 } as const
 
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini'

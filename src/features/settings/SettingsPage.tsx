@@ -12,14 +12,17 @@ export function SettingsPage() {
   const [model, setModel] = useState(DEFAULT_OPENROUTER_MODEL)
   const [saved, setSaved] = useState(false)
   const [hasKey, setHasKey] = useState(false)
+  const [rulesStrict, setRulesStrict] = useState(true)
 
   useEffect(() => {
     void (async () => {
       const k = await getSetting<string>(SETTINGS_KEYS.openRouterApiKey)
       const m = await getSetting<string>(SETTINGS_KEYS.openRouterModel)
+      const strict = await getSetting<boolean>(SETTINGS_KEYS.rulesStrict)
       setHasKey(Boolean(k))
       setApiKey(k ? '••••••••••••' : '')
       if (m) setModel(m)
+      if (strict === false) setRulesStrict(false)
     })()
   }, [])
 
@@ -30,7 +33,11 @@ export function SettingsPage() {
       setHasKey(true)
       setApiKey('••••••••••••')
     }
-    await setSetting(SETTINGS_KEYS.openRouterModel, model.trim() || DEFAULT_OPENROUTER_MODEL)
+    await setSetting(
+      SETTINGS_KEYS.openRouterModel,
+      model.trim() || DEFAULT_OPENROUTER_MODEL,
+    )
+    await setSetting(SETTINGS_KEYS.rulesStrict, rulesStrict)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -49,6 +56,32 @@ export function SettingsPage() {
           Keys stay in this device&apos;s IndexedDB — never committed to the repo.
         </p>
       </div>
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <h2 className="text-sm font-semibold text-slate-200">Table rules</h2>
+        <label className="mt-3 flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            checked={rulesStrict}
+            onChange={(e) => setRulesStrict(e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-950 text-emerald-600"
+          />
+          <span>
+            <span className="block text-sm text-white">
+              Strict rules (recommended)
+            </span>
+            <span className="mt-0.5 block text-xs text-slate-400">
+              Drawing happens automatically on your draw step — you can&apos;t spam
+              Draw. Commander multiplayer: you still draw on turn 1. Turn this off
+              only for debug free-draw testing.
+            </span>
+          </span>
+        </label>
+        <p className="mt-3 text-[11px] text-slate-500">
+          Hit Save below to persist. Reload the table after changing if a game is
+          already open.
+        </p>
+      </section>
 
       <form
         onSubmit={(e) => void onSave(e)}
@@ -78,8 +111,9 @@ export function SettingsPage() {
             className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-500"
           />
           <span className="text-[11px] text-slate-500">
-            Default: <code className="text-emerald-300">{DEFAULT_OPENROUTER_MODEL}</code> (cheap + solid).
-            Any OpenRouter model id works.
+            Default:{' '}
+            <code className="text-emerald-300">{DEFAULT_OPENROUTER_MODEL}</code>{' '}
+            (cheap + solid). Any OpenRouter model id works.
           </span>
         </label>
 
@@ -106,8 +140,8 @@ export function SettingsPage() {
       </form>
 
       <p className="text-xs text-slate-500">
-        AI advice lives on the Decks / Builder pages. Without a key (or offline), you still get
-        local heuristic tips (lands, curve, size).
+        AI advice lives on the Decks / Builder pages. Without a key (or offline),
+        you still get local heuristic tips (lands, curve, size).
       </p>
     </div>
   )

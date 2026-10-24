@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   chooseHeuristicAction,
-  countBattlefieldLands,
 } from '@/lib/ai/heuristicOpponent'
 import { expandDeckCards } from '@/lib/deck/legality'
+import {
+  DEFAULT_TURN_DRAWS,
+  nextPhaseInOrder,
+  type Phase,
+} from '@/lib/rules/turnMachine'
 import { shuffle } from '@/lib/shuffle'
 import { BLOB_KEYS, deleteBlob, getBlob, putBlob } from '@/lib/storage/blobs'
 import { getDeck, listDecks } from '@/lib/storage/decks'
@@ -13,6 +17,11 @@ import {
   listSessions,
   saveSession,
 } from '@/lib/storage/sessions'
+import {
+  getSetting,
+  setSetting,
+  SETTINGS_KEYS,
+} from '@/lib/storage/settings'
 import { installSampleDecks } from '@/lib/sample-decks/install'
 import type { CardInstance, CardRef } from '@/types/card'
 import type { Deck } from '@/types/deck'
@@ -23,16 +32,6 @@ import type {
   TurnState,
   ZoneName,
 } from '@/types/game'
-
-const PHASE_ORDER: TurnState['phase'][] = [
-  'untap',
-  'upkeep',
-  'draw',
-  'main1',
-  'combat',
-  'main2',
-  'end',
-]
 
 function toInstances(cards: CardRef[]): CardInstance[] {
   return cards.map((card) => ({
@@ -60,6 +59,8 @@ function emptyPlayer(id: string, name: string): PlayerState {
     life: 40,
     commanderDamage: {},
     zones: emptyZones(),
+    pendingDraws: 0,
+    hasLost: false,
   }
 }
 
@@ -77,6 +78,8 @@ function buildPlayerFromCards(
     life: 40,
     commanderDamage: {},
     deckId,
+    pendingDraws: 0,
+    hasLost: false,
     zones: {
       ...emptyZones(),
       library: toInstances(shuffled),
@@ -105,11 +108,20 @@ function withCommanderDamageKeys(seats: PlayerState[]): PlayerState[] {
   })
 }
 
-function initialTurn(playerId: string): TurnState {
+function normalizePlayer(p: PlayerState): PlayerState {
+  return {
+    ...p,
+    pendingDraws: p.pendingDraws ?? 0,
+    hasLost: p.hasLost ?? false,
+  }
+}
+
+function initialTurn(playerId: string, phase: Phase = 'untap'): TurnState {
   return {
     turnNumber: 1,
     activePlayerId: playerId,
-    phase: 'main1',
+    phase,
+    lastAutoNote: null,
   }
 }
 
@@ -124,8 +136,66 @@ function dealHand(p: PlayerState, n = 7): PlayerState {
       battlefield: [],
       graveyard: [],
       exile: [],
-      // keep command zone
     },
+  }
+}
+
+/**
+ * Draw up to `count` cards. Empty library while needing a card → decked (lost).
+ * Returns updated player + how many were drawn + whether they decked.
+ */
+function drawCards(
+  p: PlayerState,
+  count: number,
+): { player: PlayerState; drawn: number; decked: boolean } {
+  if (count <= 0 || p.hasLost) {
+    return { player: p, drawn: 0, decked: false }
+  }
+  const library = [...p.zones.library]
+  const hand = [...p.zones.hand]
+  let drawn = 0
+  let decked = false
+  for (let i = 0; i < count; i++) {
+    if (library.length === 0) {
+      decked = true
+      break
+    }
+    const top = library.shift()!
+    hand.push(top)
+    drawn++
+  }
+  return {
+    player: {
+      ...p,
+      zones: { ...p.zones, library, hand },
+      hasLost: decked ? true : p.hasLost,
+      loseReason: decked ? 'decked' : p.loseReason,
+      pendingDraws: 0,
+    },
+    drawn,
+    decked,
+  }
+}
+
+function untapPlayer(p: PlayerState): PlayerState {
+  return {
+    ...p,
+    zones: {
+      ...p.zones,
+      battlefield: p.zones.battlefield.map((c) => ({ ...c, tapped: false })),
+    },
+  }
+}
+
+/**
+ * Begin a player's turn at Untap: untap permanents, queue default draws.
+ * Commander multiplayer: always queue 1 draw (including first turn).
+ */
+function beginTurnPlayer(p: PlayerState): PlayerState {
+  if (p.hasLost) return p
+  return {
+    ...untapPlayer(p),
+    pendingDraws: DEFAULT_TURN_DRAWS,
   }
 }
 
@@ -133,8 +203,9 @@ export function useTableSession() {
   const [seatCount, setSeatCountState] = useState(1)
   const [players, setPlayers] = useState<PlayerState[]>(() => makeEmptySeats(1))
   const [activeSeat, setActiveSeat] = useState(0)
-  const [turn, setTurn] = useState<TurnState>(() => initialTurn('p1'))
+  const [turn, setTurn] = useState<TurnState>(() => initialTurn('p1', 'main1'))
   const [gameActive, setGameActive] = useState(false)
+  const [mulliganOpen, setMulliganOpen] = useState(false)
   const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null)
   const [log, setLog] = useState<string[]>([
     'Welcome. Install starter decks or sync cards, then Start a game.',
@@ -149,6 +220,8 @@ export function useTableSession() {
   const [aiMana, setAiMana] = useState(0)
   const [aiLandsPlayed, setAiLandsPlayed] = useState(0)
   const [busy, setBusy] = useState(false)
+  /** When true (default), free Draw is blocked; auto-draw on draw step only. */
+  const [rulesStrict, setRulesStrictState] = useState(true)
 
   const player = players[activeSeat] ?? players[0]!
 
@@ -158,12 +231,27 @@ export function useTableSession() {
     void (async () => {
       const blob = await getBlob(BLOB_KEYS.tableBackground)
       if (blob) setBackgroundUrl(URL.createObjectURL(blob))
+      const strict = await getSetting<boolean>(SETTINGS_KEYS.rulesStrict)
+      if (strict === false) setRulesStrictState(false)
     })()
   }, [])
 
   const pushLog = useCallback((msg: string) => {
     setLog((prev) => [msg, ...prev].slice(0, 80))
   }, [])
+
+  const setRulesStrict = useCallback(
+    async (value: boolean) => {
+      setRulesStrictState(value)
+      await setSetting(SETTINGS_KEYS.rulesStrict, value)
+      pushLog(
+        value
+          ? 'Rules: strict — draws only on the draw step (and queued effects).'
+          : 'Rules: debug — free Draw enabled for testing.',
+      )
+    },
+    [pushLog],
+  )
 
   const refreshDecks = useCallback(() => {
     void listDecks().then(setDecks)
@@ -190,8 +278,9 @@ export function useTableSession() {
       backgroundUrl,
       seatCount,
       gameActive,
+      mulliganOpen,
     }),
-    [players, turn, backgroundUrl, seatCount, gameActive],
+    [players, turn, backgroundUrl, seatCount, gameActive, mulliganOpen],
   )
 
   const setSeatCount = useCallback(
@@ -204,7 +293,7 @@ export function useTableSession() {
       setSeatCountState(count)
       setPlayers(makeEmptySeats(count))
       setActiveSeat(0)
-      setTurn(initialTurn('p1'))
+      setTurn(initialTurn('p1', 'main1'))
       pushLog(`Seats → ${count}`)
     },
     [gameActive, pushLog],
@@ -213,9 +302,17 @@ export function useTableSession() {
   const adjustLife = useCallback(
     (delta: number, seatIndex = activeSeat) => {
       setPlayers((prev) =>
-        prev.map((p, i) =>
-          i === seatIndex ? { ...p, life: p.life + delta } : p,
-        ),
+        prev.map((p, i) => {
+          if (i !== seatIndex) return p
+          const life = p.life + delta
+          const lost = life <= 0
+          return {
+            ...p,
+            life,
+            hasLost: lost ? true : p.hasLost,
+            loseReason: lost ? 'life' : p.loseReason,
+          }
+        }),
       )
     },
     [activeSeat],
@@ -227,12 +324,16 @@ export function useTableSession() {
         prev.map((p, i) => {
           if (i !== seatIndex) return p
           const current = p.commanderDamage[fromSeatId] ?? 0
+          const next = Math.max(0, current + delta)
+          const lost = next >= 21
           return {
             ...p,
             commanderDamage: {
               ...p.commanderDamage,
-              [fromSeatId]: Math.max(0, current + delta),
+              [fromSeatId]: next,
             },
+            hasLost: lost ? true : p.hasLost,
+            loseReason: lost ? 'commander_damage' : p.loseReason,
           }
         }),
       )
@@ -249,40 +350,86 @@ export function useTableSession() {
     pushLog('Shuffled library.')
   }, [gameActive, pushLog, updateActivePlayer])
 
+  /**
+   * Resolve draws for a seat. Used by draw step + debug free-draw.
+   * Does not bypass empty-library loss.
+   */
+  const resolveDraws = useCallback(
+    (seatIndex: number, count: number, reason: string) => {
+      let note = ''
+      setPlayers((prev) =>
+        prev.map((p, i) => {
+          if (i !== seatIndex) return p
+          if (p.hasLost) {
+            note = `${p.name} already lost — no draw.`
+            return p
+          }
+          const { player: next, drawn, decked } = drawCards(p, count)
+          if (decked) {
+            note = `${p.name} tried to draw from an empty library — decked (lost).`
+          } else if (drawn > 0) {
+            note = `${reason}: Drew ${drawn}.`
+          } else {
+            note = `${reason}: no cards drawn (pending was 0).`
+          }
+          return next
+        }),
+      )
+      if (note) {
+        pushLog(note)
+        setTurn((t) => ({ ...t, lastAutoNote: note }))
+      }
+      return note
+    },
+    [pushLog],
+  )
+
+  /** Free Draw — only when rulesStrict is false (debug). */
   const draw = useCallback(
     (n = 1, seatIndex = activeSeat) => {
-      updatePlayerAt(seatIndex, (p) => {
-        const library = [...p.zones.library]
-        const drawn = library.splice(0, n)
-        return {
-          ...p,
-          zones: {
-            ...p.zones,
-            library,
-            hand: [...p.zones.hand, ...drawn],
-          },
-        }
-      })
-      pushLog(`Seat ${seatIndex + 1} drew ${n}.`)
+      if (!gameActive) return
+      if (rulesStrict) {
+        pushLog(
+          'Draw is automatic on the draw step. (Turn off “Strict rules” in Settings for free Draw.)',
+        )
+        return
+      }
+      resolveDraws(seatIndex, n, 'Debug draw')
     },
-    [activeSeat, pushLog, updatePlayerAt],
+    [activeSeat, gameActive, pushLog, resolveDraws, rulesStrict],
+  )
+
+  /** Queue extra draws (card effects stub). Resolved on next draw step if still in earlier phase, or immediately if already past draw. */
+  const queueExtraDraws = useCallback(
+    (n: number, seatIndex = activeSeat) => {
+      if (!gameActive || n <= 0) return
+      setPlayers((prev) =>
+        prev.map((p, i) =>
+          i === seatIndex
+            ? { ...p, pendingDraws: Math.max(0, (p.pendingDraws ?? 0) + n) }
+            : p,
+        ),
+      )
+      pushLog(`Queued +${n} draw(s) for seat ${seatIndex + 1}.`)
+    },
+    [activeSeat, gameActive, pushLog],
   )
 
   const mulligan = useCallback(() => {
     if (!gameActive) return
+    if (!mulliganOpen) {
+      pushLog('Mulligans only during the opening keep/mulligan window.')
+      return
+    }
     updateActivePlayer((p) => dealHand(p, 7))
-    pushLog('Mulligan → shuffled, drew 7.')
-  }, [gameActive, pushLog, updateActivePlayer])
+    pushLog(`${player.name} mulliganed — shuffled, drew 7.`)
+  }, [gameActive, mulliganOpen, player.name, pushLog, updateActivePlayer])
 
-  const untapPermanents = useCallback((seatIndex: number) => {
-    updatePlayerAt(seatIndex, (p) => ({
-      ...p,
-      zones: {
-        ...p.zones,
-        battlefield: p.zones.battlefield.map((c) => ({ ...c, tapped: false })),
-      },
-    }))
-  }, [updatePlayerAt])
+  const keepHand = useCallback(() => {
+    if (!gameActive || !mulliganOpen) return
+    setMulliganOpen(false)
+    pushLog('Hands kept. Advance phases — draw step auto-draws for the active player.')
+  }, [gameActive, mulliganOpen, pushLog])
 
   const toggleTap = useCallback(
     (instanceId: string, seatIndex = activeSeat) => {
@@ -299,89 +446,126 @@ export function useTableSession() {
     [activeSeat, updatePlayerAt],
   )
 
-  /** Advance one phase; on leaving End, rotate player and auto untap+draw. */
-  const nextPhase = useCallback(() => {
-    if (!gameActive) return
-    setTurn((t) => {
-      const idx = PHASE_ORDER.indexOf(t.phase)
-      if (idx < 0 || idx === PHASE_ORDER.length - 1) {
-        // End turn → next player
-        const seatIds = players.map((p) => p.id)
-        const cur = seatIds.indexOf(t.activePlayerId)
-        const nextIdx = (cur + 1) % Math.max(seatIds.length, 1)
-        const nextId = seatIds[nextIdx] ?? 'p1'
-        const nextTurnNumber = nextIdx === 0 ? t.turnNumber + 1 : t.turnNumber
-
-        setActiveSeat(nextIdx)
-        setAiLandsPlayed(0)
-        setAiMana(0)
-
-        // Untap + draw for the new active player (skip draw on very first turn seat 0 if needed — EDH often draws on turn 1)
+  /** Apply auto actions when entering a phase for the active seat. */
+  const enterPhaseEffects = useCallback(
+    (phase: Phase, seatIndex: number, playersSnap: PlayerState[]) => {
+      if (phase === 'draw') {
+        const p = playersSnap[seatIndex]
+        const pending = p?.pendingDraws ?? 0
+        // Resolve whatever is queued (0 = skip / replacement stub)
         queueMicrotask(() => {
-          untapPermanents(nextIdx)
-          draw(1, nextIdx)
-          pushLog(
-            `— Turn ${nextTurnNumber}: ${players[nextIdx]?.name ?? nextId} (untap → draw) —`,
+          resolveDraws(
+            seatIndex,
+            pending,
+            pending === 1 ? 'Draw step' : `Draw step (${pending} queued)`,
           )
         })
-
-        return {
-          turnNumber: nextTurnNumber,
-          activePlayerId: nextId,
-          phase: 'main1',
-        }
       }
+    },
+    [resolveDraws],
+  )
 
-      const phase = PHASE_ORDER[idx + 1]!
-      if (phase === 'draw') {
-        queueMicrotask(() => draw(1, activeSeat))
-      }
-      if (phase === 'untap') {
-        queueMicrotask(() => {
-          untapPermanents(activeSeat)
-          setAiLandsPlayed(0)
-          setAiMana(countBattlefieldLands(player))
-        })
-      }
-      pushLog(`Phase → ${phase}`)
-      return { ...t, phase }
-    })
-  }, [
-    activeSeat,
-    draw,
-    gameActive,
-    player,
-    players,
-    pushLog,
-    untapPermanents,
-  ])
-
-  const endTurn = useCallback(() => {
-    if (!gameActive) return
-    // Jump to end-of-turn rotation
-    setTurn((t) => {
+  /**
+   * Start the next player's turn at Untap (after End), with auto path
+   * Untap → Upkeep → Draw (resolve) → Main1 for convenience when ending turn.
+   */
+  const rotateToNextPlayer = useCallback(
+    (fromTurn: TurnState, jumpToMain1: boolean) => {
       const seatIds = players.map((p) => p.id)
-      const cur = seatIds.indexOf(t.activePlayerId)
+      const cur = seatIds.indexOf(fromTurn.activePlayerId)
       const nextIdx = (cur + 1) % Math.max(seatIds.length, 1)
       const nextId = seatIds[nextIdx] ?? 'p1'
-      const nextTurnNumber = nextIdx === 0 ? t.turnNumber + 1 : t.turnNumber
+      const nextTurnNumber =
+        nextIdx === 0 ? fromTurn.turnNumber + 1 : fromTurn.turnNumber
+
       setActiveSeat(nextIdx)
       setAiLandsPlayed(0)
       setAiMana(0)
-      queueMicrotask(() => {
-        untapPermanents(nextIdx)
-        draw(1, nextIdx)
-        pushLog(
-          `End turn → ${players[nextIdx]?.name ?? nextId} (T${nextTurnNumber})`,
+      setMulliganOpen(false)
+
+      setPlayers((prev) => {
+        const next = prev.map((p, i) =>
+          i === nextIdx ? beginTurnPlayer(p) : p,
         )
+        queueMicrotask(() => {
+          if (jumpToMain1) {
+            // Untap already applied; resolve draw step now
+            const p = next[nextIdx]
+            const pending = p?.pendingDraws ?? DEFAULT_TURN_DRAWS
+            resolveDraws(
+              nextIdx,
+              pending,
+              `Turn ${nextTurnNumber} draw step`,
+            )
+            pushLog(
+              `— Turn ${nextTurnNumber}: ${prev[nextIdx]?.name ?? nextId} (untap → draw → main) —`,
+            )
+          } else {
+            pushLog(
+              `— Turn ${nextTurnNumber}: ${prev[nextIdx]?.name ?? nextId} — Untap`,
+            )
+          }
+        })
+        return next
       })
+
       return {
         turnNumber: nextTurnNumber,
         activePlayerId: nextId,
-        phase: 'main1',
+        phase: (jumpToMain1 ? 'main1' : 'untap') as Phase,
+        lastAutoNote: jumpToMain1 ? 'Drew for turn' : null,
+      } satisfies TurnState
+    },
+    [players, pushLog, resolveDraws],
+  )
+
+  const nextPhase = useCallback(() => {
+    if (!gameActive) return
+    if (mulliganOpen) setMulliganOpen(false)
+
+    setTurn((t) => {
+      const nxt = nextPhaseInOrder(t.phase)
+      if (!nxt) {
+        // Leaving End → next player, start Untap (user advances manually)
+        return rotateToNextPlayer(t, false)
       }
+
+      const seatIdx = players.findIndex((p) => p.id === t.activePlayerId)
+      const idx = seatIdx >= 0 ? seatIdx : activeSeat
+
+      if (nxt === 'draw') {
+        // Ensure pending draws exist if somehow missed beginTurn
+        setPlayers((prev) => {
+          const updated = prev.map((p, i) => {
+            if (i !== idx) return p
+            if ((p.pendingDraws ?? 0) > 0 || p.hasLost) return p
+            // Entering draw without a queue: queue default 1 (normal turn)
+            return { ...p, pendingDraws: DEFAULT_TURN_DRAWS }
+          })
+          enterPhaseEffects('draw', idx, updated)
+          return updated
+        })
+      }
+
+      pushLog(`Phase → ${nxt}`)
+      return { ...t, phase: nxt, lastAutoNote: nxt === 'draw' ? t.lastAutoNote : null }
     })
-  }, [draw, gameActive, players, pushLog, untapPermanents])
+  }, [
+    activeSeat,
+    enterPhaseEffects,
+    gameActive,
+    mulliganOpen,
+    players,
+    pushLog,
+    rotateToNextPlayer,
+  ])
+
+  /** End turn: rotate, untap, auto-draw, land on Main 1. */
+  const endTurn = useCallback(() => {
+    if (!gameActive) return
+    if (mulliganOpen) setMulliganOpen(false)
+    setTurn((t) => rotateToNextPlayer(t, true))
+  }, [gameActive, mulliganOpen, rotateToNextPlayer])
 
   const moveCard = useCallback(
     (
@@ -422,8 +606,18 @@ export function useTableSession() {
   const moveTopLibraryTo = useCallback(
     (zone: Exclude<ZoneName, 'library'>) => {
       if (!gameActive) return
+      // Top → Hand is a free draw; block under strict rules
+      if (rulesStrict && zone === 'hand') {
+        pushLog(
+          'Can’t freely put the top card into hand under strict rules — wait for the draw step (or a draw effect).',
+        )
+        return
+      }
       updateActivePlayer((p) => {
-        if (p.zones.library.length === 0) return p
+        if (p.zones.library.length === 0) {
+          pushLog('Library empty.')
+          return p
+        }
         const [top, ...rest] = p.zones.library
         if (!top) return p
         return {
@@ -437,7 +631,7 @@ export function useTableSession() {
       })
       pushLog(`Top library → ${zone}`)
     },
-    [gameActive, pushLog, updateActivePlayer],
+    [gameActive, pushLog, rulesStrict, updateActivePlayer],
   )
 
   const setBackground = useCallback(
@@ -500,7 +694,8 @@ export function useTableSession() {
   )
 
   /**
-   * Start a game: require a deck per seat (seat 0 at minimum), deal 7, commanders in CZ.
+   * Start a game: deal 7, commanders in CZ, opening mulligan window.
+   * Then run seat 1 through Untap → Draw (Commander draws on turn 1) → Main 1.
    */
   const startGame = useCallback(
     async (opts: {
@@ -521,7 +716,9 @@ export function useTableSession() {
         for (let i = 0; i < count; i++) {
           const deckId = opts.deckIds[i] ?? (i === 0 ? primaryDeckId : null)
           if (!deckId) {
-            seats.push(emptyPlayer(`p${i + 1}`, i === 0 ? 'You' : `Seat ${i + 1}`))
+            seats.push(
+              emptyPlayer(`p${i + 1}`, i === 0 ? 'You' : `Seat ${i + 1}`),
+            )
             continue
           }
           const deck =
@@ -548,17 +745,44 @@ export function useTableSession() {
           seats.push(p)
         }
 
-        const ready = withCommanderDamageKeys(seats)
+        // Begin turn 1 for seat 0: untap + queue draw, then resolve draw → main1
+        let ready = withCommanderDamageKeys(seats)
+        ready = ready.map((p, i) => (i === 0 ? beginTurnPlayer(p) : p))
+        const first = ready[0]!
+        const { player: afterDraw, drawn, decked } = drawCards(
+          first,
+          first.pendingDraws,
+        )
+        ready = ready.map((p, i) => (i === 0 ? afterDraw : p))
+
         setPlayers(ready)
         setActiveSeat(0)
-        setTurn(initialTurn(ready[0]!.id))
+        setTurn({
+          turnNumber: 1,
+          activePlayerId: ready[0]!.id,
+          phase: 'main1',
+          lastAutoNote: decked
+            ? 'Decked on turn-1 draw'
+            : drawn > 0
+              ? `Drew ${drawn}`
+              : null,
+        })
         setGameActive(true)
+        setMulliganOpen(true)
         setAiLandsPlayed(0)
         setAiMana(0)
         setSelectedInstance(null)
         pushLog(
-          `Game started · ${count} seat(s) · opening hands dealt · commanders in command zone.`,
+          `Game started · ${count} seat(s) · opening hands dealt · commanders out.`,
         )
+        pushLog(
+          'Commander multiplayer: you draw on each of your turns, including the first.',
+        )
+        if (decked) {
+          pushLog(`${afterDraw.name} decked on the opening draw — lost.`)
+        } else if (drawn > 0) {
+          pushLog(`Turn 1 draw step: Drew ${drawn}. (Mulligan window open — Keep or Mulligan.)`)
+        }
       } finally {
         setBusy(false)
       }
@@ -568,8 +792,9 @@ export function useTableSession() {
 
   const endGame = useCallback(() => {
     setGameActive(false)
+    setMulliganOpen(false)
     setPlayers(makeEmptySeats(seatCount))
-    setTurn(initialTurn('p1'))
+    setTurn(initialTurn('p1', 'main1'))
     setActiveSeat(0)
     setSelectedInstance(null)
     pushLog('Game ended. Start again when ready.')
@@ -590,13 +815,23 @@ export function useTableSession() {
         turn,
         seatCount,
         gameActive,
+        mulliganOpen,
         hasBackground: Boolean(backgroundUrl),
       },
     }
     await saveSession(record)
     setSessions(await listSessions())
     pushLog('Session saved.')
-  }, [backgroundUrl, gameActive, log, players, pushLog, seatCount, turn])
+  }, [
+    backgroundUrl,
+    gameActive,
+    log,
+    mulliganOpen,
+    players,
+    pushLog,
+    seatCount,
+    turn,
+  ])
 
   const restoreSession = useCallback(
     async (id = 'current') => {
@@ -605,10 +840,14 @@ export function useTableSession() {
         pushLog('No saved session.')
         return
       }
-      setPlayers(record.state.players)
-      setTurn(record.state.turn)
+      setPlayers(record.state.players.map(normalizePlayer))
+      setTurn({
+        ...record.state.turn,
+        phase: (record.state.turn.phase as Phase) || 'main1',
+      })
       setSeatCountState(record.state.seatCount)
       setGameActive(record.state.gameActive ?? true)
+      setMulliganOpen(record.state.mulliganOpen ?? false)
       setLog(record.log)
       setActiveSeat(
         Math.max(
@@ -681,7 +920,10 @@ export function useTableSession() {
     activeSeat,
     selectedInstance,
     gameActive,
+    mulliganOpen,
     busy,
+    rulesStrict,
+    setRulesStrict,
     setActiveSeat,
     setSeatCount,
     setSelectedInstance,
@@ -690,6 +932,8 @@ export function useTableSession() {
     shuffleLibrary,
     draw,
     mulligan,
+    keepHand,
+    queueExtraDraws,
     nextPhase,
     endTurn,
     moveTopLibraryTo,

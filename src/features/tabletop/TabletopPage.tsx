@@ -2,6 +2,7 @@ import { useEffect, useState, type DragEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { CardChip } from '@/components/CardChip'
 import { ZonePanel } from '@/components/ZonePanel'
+import { PHASE_LABEL } from '@/lib/rules/turnMachine'
 import { BackgroundControl } from './BackgroundControl'
 import { useTableSession } from './useTableSession'
 import { SAMPLE_DECK_DEFS } from '@/lib/sample-decks/install'
@@ -16,16 +17,6 @@ const MOVE_ZONES: ZoneName[] = [
   'library',
 ]
 
-const PHASE_LABEL: Record<string, string> = {
-  untap: 'Untap',
-  upkeep: 'Upkeep',
-  draw: 'Draw',
-  main1: 'Main 1',
-  combat: 'Combat',
-  main2: 'Main 2',
-  end: 'End',
-}
-
 export function TabletopPage() {
   const s = useTableSession()
   const {
@@ -39,12 +30,15 @@ export function TabletopPage() {
     activeSeat,
     selectedInstance,
     gameActive,
+    mulliganOpen,
     busy,
+    rulesStrict,
     adjustLife,
     adjustCommanderDamage,
     shuffleLibrary,
     draw,
     mulligan,
+    keepHand,
     nextPhase,
     endTurn,
     moveTopLibraryTo,
@@ -127,34 +121,62 @@ export function TabletopPage() {
 
   const activeName =
     players.find((p) => p.id === turn.activePlayerId)?.name ?? 'Player'
+  const phaseLabel =
+    PHASE_LABEL[turn.phase] ?? String(turn.phase).replace(/_/g, ' ')
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-3 px-2 py-3 sm:px-4">
-      {/* Turn banner — always visible once a game is on */}
       {gameActive ? (
         <div className="sticky top-0 z-20 -mx-2 flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/30 bg-slate-950/95 px-3 py-2 backdrop-blur sm:mx-0 sm:rounded-xl sm:border">
           <div className="min-w-0">
             <p className="text-[10px] uppercase tracking-wider text-emerald-400/80">
               Active turn
+              {rulesStrict ? ' · strict draws' : ' · debug draws'}
             </p>
             <p className="truncate text-lg font-bold text-white">
               {activeName}
               <span className="mx-2 text-slate-600">·</span>
-              <span className="text-emerald-300">
-                {PHASE_LABEL[turn.phase] ?? turn.phase}
-              </span>
+              <span className="text-emerald-300">{phaseLabel}</span>
               <span className="ml-2 text-sm font-normal text-slate-400">
                 Turn {turn.turnNumber}
               </span>
             </p>
+            {turn.lastAutoNote && (
+              <p className="mt-0.5 truncate text-xs text-amber-200/90">
+                {turn.lastAutoNote}
+              </p>
+            )}
+            {player.hasLost && (
+              <p className="mt-0.5 text-xs font-semibold text-rose-300">
+                {player.name} lost
+                {player.loseReason === 'decked'
+                  ? ' — decked (drew from empty library)'
+                  : player.loseReason === 'commander_damage'
+                    ? ' — 21 commander damage'
+                    : player.loseReason === 'life'
+                      ? ' — life ≤ 0'
+                      : ''}
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <ActionButton onClick={nextPhase}>Next phase</ActionButton>
             <ActionButton onClick={endTurn} tone="accent">
               End turn
             </ActionButton>
-            <ActionButton onClick={() => draw(1)}>Draw</ActionButton>
-            <ActionButton onClick={mulligan}>Mulligan</ActionButton>
+            {!rulesStrict && (
+              <ActionButton onClick={() => draw(1)} title="Debug free draw">
+                Draw (debug)
+              </ActionButton>
+            )}
+            {mulliganOpen && (
+              <>
+                <ActionButton onClick={keepHand} tone="accent">
+                  Keep hand
+                </ActionButton>
+                <ActionButton onClick={mulligan}>Mulligan</ActionButton>
+              </>
+            )}
             <ActionButton onClick={shuffleLibrary}>Shuffle</ActionButton>
             <ActionButton onClick={runAiOpponentStep}>AI step</ActionButton>
             <ActionButton onClick={() => void persistSession()} tone="muted">
@@ -164,6 +186,14 @@ export function TabletopPage() {
               End game
             </ActionButton>
           </div>
+          <p
+            className="w-full text-[10px] text-slate-500"
+            title="In multiplayer Commander everyone draws on each of their turns, including the first. Drawing is automatic on the draw step — not a free button."
+          >
+            Draws are automatic on the draw step (Commander: including turn 1). Use{' '}
+            <strong className="text-slate-400">End turn</strong> to rotate →
+            untap → draw → main.
+          </p>
         </div>
       ) : (
         <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3">
@@ -172,13 +202,12 @@ export function TabletopPage() {
           </p>
           <p className="mt-1 text-xs text-amber-200/70">
             Start a game below to deal opening hands, put commanders in the
-            command zone, and automatically track turns (untap → draw on End
-            turn).
+            command zone, and track turns. Drawing happens on the draw step —
+            not by spamming a Draw button.
           </p>
         </div>
       )}
 
-      {/* Start-game setup */}
       {!gameActive && (
         <div className="rounded-2xl border border-emerald-700/40 bg-gradient-to-br from-emerald-950/80 to-slate-950 p-4 shadow-lg">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
@@ -296,7 +325,6 @@ export function TabletopPage() {
         </div>
       )}
 
-      {/* Life / commander damage — seat ring */}
       {gameActive && (
         <div
           className={[
@@ -313,9 +341,11 @@ export function TabletopPage() {
               key={p.id}
               className={[
                 'rounded-xl border p-3 transition',
-                i === activeSeat
-                  ? 'border-emerald-400 bg-emerald-950/50 ring-1 ring-emerald-400/40'
-                  : 'border-slate-800 bg-slate-900/60',
+                p.hasLost
+                  ? 'border-rose-500/50 bg-rose-950/40 opacity-80'
+                  : i === activeSeat
+                    ? 'border-emerald-400 bg-emerald-950/50 ring-1 ring-emerald-400/40'
+                    : 'border-slate-800 bg-slate-900/60',
               ].join(' ')}
             >
               <button
@@ -324,7 +354,7 @@ export function TabletopPage() {
                 onClick={() => setActiveSeat(i)}
               >
                 {p.name}
-                {i === activeSeat ? ' · playing' : ''}
+                {p.hasLost ? ' · LOST' : i === activeSeat ? ' · playing' : ''}
                 {p.deckId ? '' : ' · empty'}
               </button>
               <div className="mt-1 flex items-center justify-center gap-3">
@@ -440,7 +470,6 @@ export function TabletopPage() {
         </div>
       )}
 
-      {/* Felt table surface */}
       <div
         className="relative overflow-hidden rounded-3xl border-4 border-amber-950/80 shadow-2xl shadow-black/50"
         style={{
@@ -453,7 +482,6 @@ export function TabletopPage() {
           minHeight: '28rem',
         }}
       >
-        {/* Wood rim hint */}
         <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] ring-1 ring-inset ring-amber-200/10" />
 
         {!gameActive ? (
@@ -470,7 +498,6 @@ export function TabletopPage() {
           </div>
         ) : (
           <div className="relative grid gap-3 p-3 sm:p-4">
-            {/* Opponent seats (visual) for multi */}
             {seatCount > 1 && (
               <div className="flex flex-wrap justify-center gap-2">
                 {players.map((p, i) =>
@@ -479,7 +506,10 @@ export function TabletopPage() {
                       key={p.id}
                       className="rounded-lg border border-white/10 bg-black/35 px-3 py-1.5 text-center text-[11px] text-emerald-100/80"
                     >
-                      <div className="font-semibold">{p.name}</div>
+                      <div className="font-semibold">
+                        {p.name}
+                        {p.hasLost ? ' ✕' : ''}
+                      </div>
                       <div className="text-lg font-bold tabular-nums text-white">
                         {p.life}
                       </div>
@@ -493,7 +523,6 @@ export function TabletopPage() {
               </div>
             )}
 
-            {/* Top row: Command + GY + Exile */}
             <div className="grid grid-cols-3 gap-2">
               <ZonePanel
                 title="Command"
@@ -570,7 +599,6 @@ export function TabletopPage() {
               </ZonePanel>
             </div>
 
-            {/* Center battlefield */}
             <ZonePanel
               title={`${player.name} — Battlefield`}
               count={player.zones.battlefield.length}
@@ -604,7 +632,6 @@ export function TabletopPage() {
               )}
             </ZonePanel>
 
-            {/* Bottom: Library + Hand */}
             <div className="grid grid-cols-[auto_1fr] gap-2">
               <ZonePanel
                 title="Library"
@@ -620,9 +647,11 @@ export function TabletopPage() {
                     ))}
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    <TinyButton onClick={() => moveTopLibraryTo('hand')}>
-                      Top → Hand
-                    </TinyButton>
+                    {!rulesStrict && (
+                      <TinyButton onClick={() => moveTopLibraryTo('hand')}>
+                        Top → Hand
+                      </TinyButton>
+                    )}
                     <TinyButton onClick={() => moveTopLibraryTo('battlefield')}>
                       Top → BF
                     </TinyButton>
@@ -684,10 +713,12 @@ function ActionButton({
   children,
   onClick,
   tone = 'default',
+  title,
 }: {
   children: ReactNode
   onClick: () => void
   tone?: 'default' | 'muted' | 'accent'
+  title?: string
 }) {
   const cls =
     tone === 'muted'
@@ -696,7 +727,7 @@ function ActionButton({
         ? 'min-h-9 rounded-md bg-amber-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-amber-500'
         : 'min-h-9 rounded-md bg-emerald-700/90 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-600'
   return (
-    <button type="button" onClick={onClick} className={cls}>
+    <button type="button" onClick={onClick} className={cls} title={title}>
       {children}
     </button>
   )
