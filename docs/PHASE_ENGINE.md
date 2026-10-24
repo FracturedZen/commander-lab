@@ -94,16 +94,17 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `deckMap.ts` | Lab decks → Phase name-only `DeckList` |
 | `headlessGoldfish.ts` | N-step AI vs AI without UI |
 | `phaseStateView.ts` | ClientGameState → Arena board view + art hydrate |
+| `engineInteraction.ts` | Targeting / combat / mulligan helpers (display-only) |
 | `config.ts` | `ENGINE_MODE`, CDN URLs |
 | `phase-worker.js` | optional Web Worker protocol (public/) |
-| `../features/engine/EngineBoard.tsx` | Arena board (art chips, Pass, glow → submit) |
+| `../features/engine/EngineBoard.tsx` | Arena board (targeting, combat, mulligan, glow → submit) |
 
-## How to play (v0.6.1+)
+## How to play (v0.6.2+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** (first time: ~39 MB WASM + ~96 MB card-data).
 3. Pick two decks (samples install automatically) → **Start vs AI**.
-4. Arena-style board reflects Phase zones (hand fan, BF art chips, lands, command, life). Cyan glow = objects with legal actions — tap to submit (or pick when multiple). **Pass** FAB / rail submits `PassPriority`. **AI step** drives opponents. **Show all actions** is the fallback list.
+4. Arena-style board reflects Phase zones (hand fan, BF art chips, lands, command, life). **Cyan** glow = legal actions; **rose** = choose targets for a cast; **orange** = declare attackers/blockers (from `waiting_for`); **amber** flash = Auto mana sources. Mulligan Keep/Mulligan banner when waiting. Opponent hand shows face-down stubs. **Pass** FAB / rail submits `PassPriority`. **AI step** drives opponents. **Show all actions** remains the fallback list.
 5. No free DnD on this page — only engine-legal submits.
 6. **Headless goldfish** runs stub basics decks with Phase Medium AI until turn/step limit.
 
@@ -113,9 +114,11 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) before 
 
 ## Limits & next work
 
-- Engine board maps Phase state → art chips; mana payment shortcuts / multi-target wizards still use the action list / picker (not full Arena targeting UX).
+- Targeting wizard matches Phase legal CastSpell target combinations (prefix filter); does not invent targets. Multi-target order follows engine-enumerated variants.
+- Combat UI covers 2p single-target attacks (first valid AttackTarget) and blocker→attacker pairs from `waiting_for`. Banding / multiplayer attack-target pickers still need richer UI.
+- Manual mana payment mode / sacrifice-mana picker not exposed — Auto / AutoExceptSacrificialMana only.
 - Phase rail stops are display-only in engine mode (engine owns phase advances).
-- Mulligan / special decisions may need the action list when not object-scoped.
+- Other WaitingFor prompts (discard, modal choices, etc.) still use the action list.
 - Lazy-load / compress card-data further; optional Worker boot path.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.
 - Local `build-wasm.sh` may take a long time on the box; CDN path is the supported deploy path.

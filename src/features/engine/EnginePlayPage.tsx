@@ -179,7 +179,7 @@ export function EnginePlayPage() {
         <div>
           <h1 className="text-lg font-semibold text-white">Phase Engine</h1>
           <p className="text-xs text-slate-400">
-            Arena board ← Phase state. Only engine-legal actions (cyan glow / Pass / list).
+            Arena board ← Phase state. Cyan = legal · rose = targets · orange = combat · amber = mana preview.
           </p>
         </div>
         <div className="flex gap-2">
@@ -280,6 +280,7 @@ export function EnginePlayPage() {
           busy={busy}
           onSubmit={(a) => void submit(a)}
           onDriveAi={() => void driveAi()}
+          onPreviewMana={(a) => adapter.previewManaPayment(a, 0)}
         />
       )}
 

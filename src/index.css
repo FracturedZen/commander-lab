@@ -79,6 +79,45 @@ textarea {
   }
 }
 
+
+.card-chip--target {
+  border-color: rgba(251, 113, 133, 0.95);
+  box-shadow:
+    0 0 0 1px rgba(254, 205, 211, 0.7),
+    0 0 12px 3px rgba(244, 63, 94, 0.55),
+    0 0 24px 6px rgba(251, 113, 133, 0.35),
+    0 4px 10px rgba(0, 0, 0, 0.45);
+  z-index: 2;
+}
+
+.card-chip--mana {
+  border-color: rgba(251, 191, 36, 0.95);
+  box-shadow:
+    0 0 0 1px rgba(253, 230, 138, 0.75),
+    0 0 12px 3px rgba(245, 158, 11, 0.55),
+    0 0 22px 5px rgba(251, 191, 36, 0.35),
+    0 4px 10px rgba(0, 0, 0, 0.45);
+  z-index: 2;
+}
+
+.card-chip--combat {
+  border-color: rgba(251, 146, 60, 0.95);
+  box-shadow:
+    0 0 0 1px rgba(254, 215, 170, 0.7),
+    0 0 12px 3px rgba(234, 88, 12, 0.55),
+    0 0 24px 6px rgba(251, 146, 60, 0.35),
+    0 4px 10px rgba(0, 0, 0, 0.45);
+  z-index: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-chip--target,
+  .card-chip--mana,
+  .card-chip--combat {
+    transition: none;
+  }
+}
+
 .card-chip--legal-cursor {
   cursor: pointer;
 }

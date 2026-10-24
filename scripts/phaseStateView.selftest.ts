@@ -110,3 +110,76 @@ assert(view.phase === 'main1', 'lab phase')
 assert(view.actionsByObject['1']?.length === 1, 'glow map')
 
 console.log('phaseStateView.selftest OK')
+
+// --- engineInteraction helpers ---
+import {
+  parseWaitingFor,
+  needsTargetingWizard,
+  nextSlotTargets,
+  matchCastVariant,
+  ensureAutoPayment,
+  buildDeclareAttackersAction,
+  findMulliganActions,
+} from '../src/engine/engineInteraction.ts'
+
+const waitAtk = parseWaitingFor({
+  type: 'DeclareAttackers',
+  data: {
+    player: 0,
+    valid_attacker_ids: [10, 11],
+    valid_attack_targets: [{ type: 'Player', data: 1 }],
+  },
+})
+assert(waitAtk?.kind === 'DeclareAttackers', 'parse attackers')
+if (waitAtk?.kind === 'DeclareAttackers') {
+  assert(waitAtk.validAttackerIds.join(',') === '10,11', 'attacker ids')
+  const act = buildDeclareAttackersAction(['10'], waitAtk)
+  assert(act?.type === 'DeclareAttackers', 'build attack')
+  const data = act!.data as { attacks: unknown[] }
+  assert(Array.isArray(data.attacks) && data.attacks.length === 1, 'one attack')
+}
+
+const waitBlk = parseWaitingFor({
+  type: 'DeclareBlockers',
+  data: {
+    player: 0,
+    valid_blocker_ids: [20],
+    valid_block_targets: { '20': [10] },
+  },
+})
+assert(waitBlk?.kind === 'DeclareBlockers', 'parse blockers')
+
+const casts = [
+  { type: 'CastSpell', data: { object_id: 2, card_id: 1, targets: [5] } },
+  { type: 'CastSpell', data: { object_id: 2, card_id: 1, targets: [6] } },
+]
+assert(needsTargetingWizard(casts), 'needs wizard')
+assert(nextSlotTargets(casts, []).sort().join(',') === '5,6', 'next slots')
+assert(matchCastVariant(casts, ['5'])?.data && true, 'match 5')
+const paid = ensureAutoPayment(casts[0]!)
+assert(
+  (paid.data as { payment_mode?: { type?: string } }).payment_mode?.type === 'Auto',
+  'auto pay stamped',
+)
+
+const mull = findMulliganActions([
+  { type: 'MulliganDecision', data: { choice: { type: 'Keep' } } },
+  { type: 'MulliganDecision', data: { choice: { type: 'Mulligan' } } },
+])
+assert(!!mull.keep && !!mull.mulligan, 'mulligan actions')
+
+// waitingRaw passthrough
+const withWait = {
+  state: {
+    ...wrapped.state,
+    waiting_for: {
+      type: 'DeclareAttackers',
+      data: { player: 0, valid_attacker_ids: [5], valid_attack_targets: [{ type: 'Player', data: 1 }] },
+    },
+  },
+}
+const viewWait = buildPhaseBoardView(withWait, { actions: [] })
+assert(viewWait.waitingFor === 'DeclareAttackers', 'waitingFor type')
+assert(viewWait.waitingRaw && typeof viewWait.waitingRaw === 'object', 'waitingRaw present')
+
+console.log('phaseStateView.selftest + engineInteraction: ok')

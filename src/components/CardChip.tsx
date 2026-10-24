@@ -11,6 +11,8 @@ type CardChipProps = {
   selected?: boolean
   /** Arena-style soft cyan glow when a legal action is available now. */
   highlighted?: boolean
+  /** Override glow color: target (rose), mana (amber), combat (orange). */
+  glow?: 'legal' | 'target' | 'mana' | 'combat'
   tapped?: boolean
   size?: CardChipSize
   onClick?: () => void
@@ -59,6 +61,7 @@ export function CardChip({
   draggable = false,
   selected = false,
   highlighted = false,
+  glow = 'legal',
   tapped = false,
   size = 'board',
   onClick,
@@ -157,8 +160,11 @@ export function CardChip({
         selected
           ? 'border-emerald-400 ring-2 ring-emerald-400/55'
           : 'border-slate-500/50',
-        highlighted ? 'card-chip--activatable' : '',
-        highlighted && selected ? 'card-chip--activatable-strong' : '',
+        highlighted && glow === 'legal' ? 'card-chip--activatable' : '',
+        highlighted && glow === 'legal' && selected ? 'card-chip--activatable-strong' : '',
+        highlighted && glow === 'target' ? 'card-chip--target' : '',
+        highlighted && glow === 'mana' ? 'card-chip--mana' : '',
+        highlighted && glow === 'combat' ? 'card-chip--combat' : '',
         highlighted ? 'card-chip--legal-cursor' : '',
         tapped ? 'card-chip--tapped origin-center' : '',
         onClick || draggable ? 'cursor-pointer' : '',

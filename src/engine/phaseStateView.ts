@@ -50,6 +50,8 @@ export type PhaseBoardView = {
   phaseRaw: string
   phase: LabPhase
   waitingFor?: string
+  /** Full waiting_for payload for combat / mulligan UX */
+  waitingRaw?: unknown
   gameOver: boolean
   seats: PhaseSeatView[]
   stackCount: number
@@ -97,7 +99,7 @@ type RawState = {
   exile?: Array<number | string>
   command_zone?: Array<number | string>
   stack?: unknown[]
-  waiting_for?: { type?: string } | string | null
+  waiting_for?: { type?: string; data?: unknown } | string | null
   game_over?: boolean
   eliminated_players?: number[]
   [key: string]: unknown
@@ -382,6 +384,7 @@ export function buildPhaseBoardView(
     phaseRaw,
     phase: mapPhaseStepToLab(phaseRaw),
     waitingFor: waitingType(state),
+    waitingRaw: state.waiting_for ?? null,
     gameOver: Boolean(state.game_over),
     seats,
     stackCount: Array.isArray(state.stack) ? state.stack.length : 0,

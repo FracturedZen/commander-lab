@@ -41,6 +41,19 @@ function unwrapStateEnvelope(raw: unknown): Record<string, unknown> {
   return raw as Record<string, unknown>
 }
 
+
+function unwrapPreviewIds(raw: unknown): string[] {
+  if (typeof raw === 'string') throw new Error(raw)
+  if (!raw || typeof raw !== 'object') return []
+  const r = raw as { status?: string; result?: unknown; rejection?: { message?: string } }
+  if (r.status === 'rejected') {
+    throw new Error(r.rejection?.message || 'Mana preview rejected')
+  }
+  const result = 'status' in r && 'result' in r ? r.result : raw
+  if (!Array.isArray(result)) return []
+  return result.map((x) => String(x))
+}
+
 function unwrapAction(raw: unknown): PhaseSubmitResult {
   if (typeof raw === 'string') throw new Error(raw)
   if (!raw || typeof raw !== 'object') return { result: raw }
@@ -262,6 +275,39 @@ export class PhaseAdapter {
       }
     }
     return { steps, stoppedReason: 'step_limit' }
+  }
+
+
+  /** Object ids that are legal targets for casting this object (engine helper). */
+  legalTargetsForCastable(objectId: number | string): string[] {
+    if (!this.wasm?.legal_targets_for_castable_js) return []
+    try {
+      const n = typeof objectId === 'number' ? objectId : Number(objectId)
+      if (!Number.isFinite(n)) return []
+      const raw = this.wasm.legal_targets_for_castable_js(n)
+      if (Array.isArray(raw)) return raw.map((x) => String(x))
+      if (raw && typeof raw === 'object') {
+        const r = raw as { result?: unknown; targets?: unknown }
+        const list = Array.isArray(r.result) ? r.result : Array.isArray(r.targets) ? r.targets : []
+        return list.map((x) => String(x))
+      }
+      return []
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * Preview which permanents Auto payment would tap/activate for a cast.
+   * Returns object id strings; empty if preview unavailable.
+   */
+  previewManaPayment(action: PhaseGameAction, actor: number = this.viewerId): string[] {
+    if (!this.wasm?.preview_mana_payment_js) return []
+    try {
+      return unwrapPreviewIds(this.wasm.preview_mana_payment_js(actor, action))
+    } catch {
+      return []
+    }
   }
 
   clear(): void {
