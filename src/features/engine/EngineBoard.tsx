@@ -2,11 +2,17 @@
  * Arena-style board driven purely by Phase state + legal actions.
  * No free DnD / zone moves — only engine submits.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CardChip } from '@/components/CardChip'
 import { CardDetailOverlay } from '@/components/CardDetailOverlay'
 import { PhaseRail } from '@/components/PhaseRail'
 import type { PhaseGameAction } from '@/engine'
+import { buildEngineAdviceSummary } from '@/engine/boardAdviceSummary'
+import {
+  adviseEnginePlay,
+  type AdviceResult,
+} from '@/lib/ai/openrouter'
+import { EngineAdvicePanel } from './EngineAdvicePanel'
 import {
   pickPrimaryAction,
   summarizeAction,
@@ -308,6 +314,30 @@ export function EngineBoard({
   const [mode, setMode] = useState<UiMode>({ kind: 'idle' })
   const [manaGlow, setManaGlow] = useState<Set<string>>(() => new Set())
   const [paymentPref, setPaymentPref] = useState<CastPaymentModeType>('Auto')
+
+  const [adviceOpen, setAdviceOpen] = useState(false)
+  const [adviceLoading, setAdviceLoading] = useState(false)
+  const [adviceResult, setAdviceResult] = useState<AdviceResult | null>(null)
+
+  const requestAdvice = useCallback(async () => {
+    setAdviceOpen(true)
+    setAdviceLoading(true)
+    try {
+      const summary = buildEngineAdviceSummary(view)
+      const result = await adviseEnginePlay(summary)
+      setAdviceResult(result)
+    } catch (err) {
+      setAdviceResult({
+        source: 'local',
+        error: err instanceof Error ? err.message : 'Advice failed',
+        text:
+          'Could not get advice. Check Settings → OpenRouter, then try again.\n\n' +
+          'Reminder: advice never submits — use board glow / Pass yourself.',
+      })
+    } finally {
+      setAdviceLoading(false)
+    }
+  }, [view])
 
   const waitingDetail: WaitingDetail = useMemo(
     () => parseWaitingFor(view.waitingRaw ?? view.waitingFor),
@@ -3600,6 +3630,14 @@ export function EngineBoard({
           >
             AI
           </button>
+          <button
+            type="button"
+            disabled={busy || adviceLoading}
+            onClick={() => void requestAdvice()}
+            className="min-h-12 rounded-xl bg-violet-900 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-violet-100 ring-1 ring-violet-600/50 disabled:opacity-40"
+          >
+            Coach
+          </button>
           {onRematch && (
             <button
               type="button"
@@ -3635,6 +3673,14 @@ export function EngineBoard({
           className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-40"
         >
           AI step
+        </button>
+        <button
+          type="button"
+          disabled={busy || adviceLoading}
+          onClick={() => void requestAdvice()}
+          className="rounded bg-violet-900 px-2 py-1 text-xs font-medium text-violet-100 ring-1 ring-violet-700/40 disabled:opacity-40"
+        >
+          {adviceLoading ? 'Coach…' : 'Coach advice'}
         </button>
         {onRematch && (
           <button
@@ -3750,6 +3796,15 @@ export function EngineBoard({
       {inspect && (
         <CardDetailOverlay card={inspect.card} onClose={() => setInspect(null)} />
       )}
+
+      <EngineAdvicePanel
+        open={adviceOpen}
+        loading={adviceLoading}
+        result={adviceResult}
+        onClose={() => setAdviceOpen(false)}
+        onRefresh={() => void requestAdvice()}
+      />
+
     </div>
   )
 }

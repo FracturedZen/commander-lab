@@ -97,11 +97,12 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `phaseStateView.ts` | ClientGameState → Arena board view + art hydrate |
 | `engineInteraction.ts` | Targeting / combat / mana / discard / mode helpers (display-only) |
 | `phaseGameLog.ts` | ActionResult `log_entries` / events → compact UI lines; mana pool aggregates; Concede builder |
+| `boardAdviceSummary.ts` | Compact live-board text for OpenRouter coach |
 | `config.ts` | `ENGINE_MODE`, CDN URLs |
 | `phase-worker.js` | Boot Worker: fetch + `WebAssembly.compile` off main; posts Module + progress |
 | `../features/engine/EngineBoard.tsx` | Arena board + phone sticky action dock (WaitingFor banners + Pass); multi-seat opponent chrome; stack rail, targeting, combat, mana chrome, ActivateAbility, priority banner, command cast+spellCosts, Concede/Rematch |
 
-## How to play (v0.7.5+)
+## How to play (v0.7.6+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** — staged progress (glue → WASM download/compile → instantiate → card-data download/decode/cache → Phase `load_card_database` → ready). **Worker boot** (v0.7.4): `phase-worker.js` fetch + `WebAssembly.compile` off main; main instantiates/binds. **Card-data soft boot** (v0.7.5): CDN already serves **brotli ~7.1 MB** (decoded ~95 MB); chunked UTF-8 decode with `requestIdleCallback` / `scheduler.yield` between 2 MiB slices; IDB stores ArrayBuffer for new downloads (legacy text blobs still count as cached); clear “UI may pause” stage before sync `load_card_database` (cannot split — Phase JSON string API only). No card-data split (Phase has no chunked load). **Cached** badge + “Already cached — instant boot” when SW WASM + IDB card-data warm. **Retry boot** on failure. Start also boots automatically.
@@ -116,7 +117,7 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 
 ## Headless / AI
 
-Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) before OpenRouter. OpenRouter remains in Settings for future LLM coach / probe hooks Phase already exposes — not required for goldfish.
+Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) for driving opponent seats / goldfish. **OpenRouter coach** (v0.7.6): Engine **Coach advice** button uses the same Settings → OpenRouter API key + model (`SETTINGS_KEYS.openRouterApiKey` / `openRouterModel`); sends a compact board summary (life, seats, hand names, BF, stack top, waiting_for, legal action labels) and shows a phone-friendly drawer. Advice never auto-submits — human confirms via glow / Pass. No key / offline → local tips + Settings link. Not required for goldfish.
 
 ## Limits & next work
 
@@ -132,7 +133,8 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) before 
 - WASM boot UX + Play nav (v0.7.3): real boot stages / byte progress / Retry; nav **Play** → `/engine` (Phase rules); **Legacy** → `/` sandbox; home Legacy Table CTA points at Engine.
 - Worker boot + multi-seat seat math (v0.7.4): compile-in-Worker path with main instantiate; cache-instant UX; `playerCountFromDeckList` / empty `ai_decks` on 2p stubs so rematch no longer inflates 2→3; null-seat guards on board view.
 - Soft card-data boot (v0.7.5): chunked decode + idle yields; IDB ArrayBuffer; painted warning before sync `load_card_database`. Wire already br (~7 MB); Phase accepts only JSON string — no gzip-to-WASM / no cheap split.
-- Full game-in-worker / off-main `load_card_database` still blocked (sync wasm-bindgen + string API). Vote / draft / banding still stubbed.
+- OpenRouter Engine coach (v0.7.6): Coach advice drawer; Settings key reuse; compact summary; no auto-submit.
+- Full game-in-worker / off-main `load_card_database` still blocked. Vote / draft / banding still stubbed.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.
 - Local `build-wasm.sh` may take a long time on the box; CDN path is the supported deploy path.
 

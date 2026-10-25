@@ -3,6 +3,7 @@ export type { EngineMode } from './config'
 export { PhaseAdapter, getPhaseAdapter } from './PhaseAdapter'
 export { loadPhaseWasm, getCachedPhaseWasm } from './loadPhaseWasm'
 export { loadPhaseCardDataText, hasCachedPhaseCardData } from './cardDataCache'
+export { buildEngineAdviceSummary } from './boardAdviceSummary'
 export { yieldToMain, yieldIdle, yieldForPaint } from './bootYield'
 export {
   BOOT_STAGE_LABELS,
