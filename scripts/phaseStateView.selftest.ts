@@ -4,7 +4,8 @@ import {
   normalizeLegalActions,
   unwrapPhaseState,
 } from '../src/engine/phaseStateView.ts'
-import { toPhaseDeckList, deckToPhasePlayer } from '../src/engine/deckMap'
+import { toPhaseDeckList, toPhaseMultiDeckList, deckToPhasePlayer } from '../src/engine/deckMap'
+import { goldfishStubDecksForCount } from '../src/engine/goldfishDecks'
 import {
   unwrapActionPayload,
   linesFromActionPayload,
@@ -1006,3 +1007,97 @@ console.log('phaseStateView.selftest: ok (incl. v0.6.9 deckMap)')
   assert(concede.type === 'Concede' && concede.data.player_id === 0, 'buildConcedeAction')
 }
 console.log('phaseStateView.selftest: ok (incl. v0.7.0 gameLog/mana/concede)')
+
+// --- v0.7.1 multi-seat deck list / stubs ---
+{
+  const fakeDeck = {
+    id: 'd1',
+    name: 'Test',
+    commander: { id: 'c', name: 'Krenko, Mob Boss', quantity: 1 },
+    cards: [{ id: 'a', name: 'Mountain', quantity: 50 }],
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const fakeAi = {
+    ...fakeDeck,
+    id: 'd2',
+    name: 'AI1',
+    commander: { id: 'c2', name: 'Aesi, Tyrant of Gyre Strait', quantity: 1 },
+    cards: [{ id: 'i', name: 'Island', quantity: 50 }],
+  }
+  const fakeAi2 = {
+    ...fakeDeck,
+    id: 'd3',
+    name: 'AI2',
+    commander: { id: 'c3', name: 'Selvala, Heart of the Wilds', quantity: 1 },
+    cards: [{ id: 'f', name: 'Forest', quantity: 50 }],
+  }
+  const fakeAi3 = {
+    ...fakeDeck,
+    id: 'd4',
+    name: 'AI3',
+    commander: { id: 'c4', name: 'Purphoros, God of the Forge', quantity: 1 },
+    cards: [{ id: 'm', name: 'Mountain', quantity: 50 }],
+  }
+  const two = toPhaseMultiDeckList(fakeDeck as never, [fakeAi as never], { playerCount: 2 })
+  assert(two.ai_decks.length === 0, '2p ai_decks empty (opponent-only)')
+  assert(two.ai_difficulties?.length === 1, '2p one difficulty')
+  const three = toPhaseMultiDeckList(fakeDeck as never, [fakeAi as never, fakeAi2 as never], {
+    playerCount: 3,
+  })
+  assert(three.ai_decks.length === 1, '3p one extra')
+  assert(three.ai_decks[0].commander[0] === 'Selvala, Heart of the Wilds', 'seat2 selvala')
+  assert(three.ai_difficulties?.length === 2, '3p two difficulties')
+  const four = toPhaseMultiDeckList(
+    fakeDeck as never,
+    [fakeAi as never, fakeAi2 as never, fakeAi3 as never],
+    { playerCount: 4 },
+  )
+  assert(four.ai_decks.length === 2, '4p two extras')
+  assert(four.opponent.commander[0] === 'Aesi, Tyrant of Gyre Strait', 'seat1 aesi')
+  assert(four.ai_decks[1].commander[0] === 'Purphoros, God of the Forge', 'seat3 purph')
+
+  const stub4 = goldfishStubDecksForCount(4)
+  assert(stub4.player.commander[0] === 'Krenko, Mob Boss', 'stub seat0')
+  assert(stub4.ai_decks.length === 2, 'stub 4p extras')
+  assert(stub4.ai_difficulties?.length === 3, 'stub 3 difficulties')
+  assert(stub4.player.main_deck.length === 99, 'stub 99')
+
+  // Board view with 4 seats
+  const mkLand = (id: number, owner: number, zone: string) => ({
+    id,
+    name: 'Island',
+    zone,
+    owner,
+    controller: owner,
+    tapped: false,
+    card_types: { supertypes: ['Basic'], core_types: ['Land'], subtypes: ['Island'] },
+  })
+  const fourState = {
+    state: {
+      turn_number: 1,
+      active_player: 2,
+      priority_player: 0,
+      phase: 'PreCombatMain',
+      players: [
+        { id: 0, life: 40, library: [1], hand: [], graveyard: [], poison_counters: 0 },
+        { id: 1, life: 39, library: [2], hand: [10, 11], graveyard: [], poison_counters: 1 },
+        { id: 2, life: 38, library: [3], hand: [12], graveyard: [], poison_counters: 0 },
+        { id: 3, life: 37, library: [4], hand: [], graveyard: [], poison_counters: 0 },
+      ],
+      objects: {
+        '10': mkLand(10, 1, 'Hand'),
+        '11': mkLand(11, 1, 'Hand'),
+        '12': mkLand(12, 2, 'Hand'),
+      },
+      derived: { commander_damage_by_attacker: {} },
+    },
+  }
+  const v4 = buildPhaseBoardView(fourState, { actions: [] })
+  assert(v4.seats.length === 4, '4 seats mapped')
+  assert(v4.seats[1].poison === 1, 'poison seat1')
+  assert(v4.seats[1].hand.length === 2, 'hand count seat1')
+  assert(v4.seats[1].libraryCount === 1, 'library seat1')
+  assert(v4.activePlayer === 2, 'active seat2')
+}
+console.log('phaseStateView.selftest: ok (incl. v0.7.1 multi-seat)')

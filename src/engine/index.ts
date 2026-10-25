@@ -6,6 +6,7 @@ export { loadPhaseCardDataText } from './cardDataCache'
 export {
   deckToPhasePlayer,
   toPhaseDeckList,
+  toPhaseMultiDeckList,
   sampleToPhasePlayer,
   emptyPhasePlayerDeck,
 } from './deckMap'
@@ -13,7 +14,7 @@ export { runHeadlessGoldfish } from './headlessGoldfish'
 export type { GoldfishResult } from './headlessGoldfish'
 export type * from './types'
 export { MockEngine } from './MockEngine'
-export { goldfishStubDecks, sanitizePhasePlayer } from './goldfishDecks'
+export { goldfishStubDecks, goldfishStubDecksForCount, sanitizePhasePlayer } from './goldfishDecks'
 
 export {
   buildPhaseBoardView,

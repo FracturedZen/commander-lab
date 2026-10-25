@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom'
 import {
   getPhaseAdapter,
   runHeadlessGoldfish,
-  goldfishStubDecks,
+  goldfishStubDecksForCount,
   sanitizePhasePlayer,
-  toPhaseDeckList,
+  toPhaseMultiDeckList,
   linesFromActionPayload,
   mergeLogLines,
   buildConcedeAction,
@@ -30,6 +30,9 @@ import { EngineBoard } from './EngineBoard'
 const STUB_DECK_ID = '__stub_basics__'
 const LS_HUMAN = 'cl.engine.humanDeckId'
 const LS_AI = 'cl.engine.aiDeckId'
+const LS_SEATS = 'cl.engine.playerCount'
+const LS_AI_SEATS = 'cl.engine.aiDeckIds'
+const MAX_TABLE = 4
 
 function deckLabel(d: Deck): string {
   const cmd = d.commander?.name
@@ -76,17 +79,37 @@ export function EnginePlayPage() {
   const [decks, setDecks] = useState<Deck[]>([])
   const [decksReady, setDecksReady] = useState(false)
   const [humanDeckId, setHumanDeckId] = useState<string>(() => readLs(LS_HUMAN))
-  const [aiDeckId, setAiDeckId] = useState<string>(() => readLs(LS_AI))
+  const [playerCount, setPlayerCount] = useState<number>(() => {
+    const n = Number(readLs(LS_SEATS) || '2')
+    return Number.isFinite(n) ? Math.max(2, Math.min(MAX_TABLE, Math.floor(n))) : 2
+  })
+  const [aiDeckIds, setAiDeckIds] = useState<string[]>(() => {
+    try {
+      const raw = readLs(LS_AI_SEATS)
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown
+        if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
+          return parsed.length ? parsed : [readLs(LS_AI) || STUB_DECK_ID]
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    const legacy = readLs(LS_AI)
+    return legacy ? [legacy] : [STUB_DECK_ID]
+  })
   const [board, setBoard] = useState<PhaseBoardView | null>(null)
   const [clientLog, setClientLog] = useState<string[]>([])
   const [gameLog, setGameLog] = useState<PhaseLogLine[]>([])
   const [logOpen, setLogOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [aiBusy, setAiBusy] = useState(false)
   const [goldfish, setGoldfish] = useState<GoldfishResult | null>(null)
   const [fallbackBanner, setFallbackBanner] = useState<string | null>(null)
   const [setupOpen, setSetupOpen] = useState(true)
   const [startNote, setStartNote] = useState<string | null>(null)
   const lastDeckList = useRef<PhaseDeckList | null>(null)
+  const lastPlayerCount = useRef<number>(2)
   const logEndRef = useRef<HTMLDivElement | null>(null)
 
   const refreshDecks = useCallback(async () => {
@@ -101,14 +124,22 @@ export function EnginePlayPage() {
       writeLs(LS_HUMAN, next)
       return next
     })
-    setAiDeckId((prev) => {
-      if (prev === STUB_DECK_ID) return prev
-      if (prev && list.some((d) => d.id === prev)) return prev
-      const next = list[1]?.id ?? list[0]?.id ?? STUB_DECK_ID
-      writeLs(LS_AI, next)
+    setAiDeckIds((prev) => {
+      const fallback = list[1]?.id ?? list[0]?.id ?? STUB_DECK_ID
+      const next = prev.map((id, i) => {
+        if (id === STUB_DECK_ID) return id
+        if (id && list.some((d) => d.id === id)) return id
+        return list[(i + 1) % Math.max(1, list.length)]?.id ?? fallback
+      })
+      const needed = Math.max(1, playerCount - 1)
+      while (next.length < needed) {
+        next.push(list[next.length % Math.max(1, list.length)]?.id ?? fallback)
+      }
+      writeLs(LS_AI_SEATS, JSON.stringify(next))
+      if (next[0]) writeLs(LS_AI, next[0])
       return next
     })
-  }, [])
+  }, [playerCount])
 
   useEffect(() => {
     void refreshDecks()
@@ -122,9 +153,34 @@ export function EnginePlayPage() {
     setHumanDeckId(id)
     writeLs(LS_HUMAN, id)
   }
-  const pickAi = (id: string) => {
-    setAiDeckId(id)
-    writeLs(LS_AI, id)
+  const pickAiSeat = (seatIndex: number, id: string) => {
+    // seatIndex is 0-based among AI seats (Phase seat = seatIndex + 1)
+    setAiDeckIds((prev) => {
+      const next = [...prev]
+      while (next.length <= seatIndex) next.push(STUB_DECK_ID)
+      next[seatIndex] = id
+      writeLs(LS_AI_SEATS, JSON.stringify(next))
+      if (seatIndex === 0) writeLs(LS_AI, id)
+      return next
+    })
+  }
+  const changePlayerCount = (n: number) => {
+    const bounds = adapter.isReady ? adapter.seatBounds() : { min: 2, max: MAX_TABLE }
+    const clamped = Math.max(bounds.min, Math.min(Math.min(bounds.max, MAX_TABLE), n))
+    setPlayerCount(clamped)
+    writeLs(LS_SEATS, String(clamped))
+    setAiDeckIds((prev) => {
+      const needed = clamped - 1
+      const next = [...prev]
+      const fallback = decks[1]?.id ?? decks[0]?.id ?? STUB_DECK_ID
+      while (next.length < needed) {
+        next.push(decks[next.length % Math.max(1, decks.length)]?.id ?? fallback)
+      }
+      if (next.length > needed) next.length = needed
+      writeLs(LS_AI_SEATS, JSON.stringify(next))
+      if (next[0]) writeLs(LS_AI, next[0])
+      return next
+    })
   }
 
   const pushLog = (line: string) =>
@@ -151,32 +207,53 @@ export function EnginePlayPage() {
     }
   }, [adapter])
 
-  const buildDeckList = useCallback((): PhaseDeckList => {
-    const human =
-      humanDeckId === STUB_DECK_ID
-        ? null
-        : decks.find((d) => d.id === humanDeckId) ?? null
-    const ai =
-      aiDeckId === STUB_DECK_ID ? null : decks.find((d) => d.id === aiDeckId) ?? null
+  const resolveDeckOrNull = useCallback(
+    (id: string): Deck | null => {
+      if (!id || id === STUB_DECK_ID) return null
+      return decks.find((d) => d.id === id) ?? null
+    },
+    [decks],
+  )
 
-    if (human) {
-      const oppDeck = ai ?? human
-      let deckList = toPhaseDeckList(human, oppDeck)
-      deckList = {
-        ...deckList,
-        player: sanitizePhasePlayer(deckList.player, 'Mountain'),
-        opponent: sanitizePhasePlayer(deckList.opponent, 'Island'),
-        ai_decks: [sanitizePhasePlayer(deckList.opponent, 'Island')],
-      }
-      const note = ai
-        ? `Saved decks: ${human.name} vs ${ai.name}`
-        : `Saved deck ${human.name} (AI mirrors you)`
-      setStartNote(note)
-      return deckList
+  const buildDeckList = useCallback((): PhaseDeckList => {
+    const n = Math.max(2, Math.min(MAX_TABLE, playerCount))
+    const human = resolveDeckOrNull(humanDeckId)
+    const aiResolved = aiDeckIds.slice(0, n - 1).map((id) => resolveDeckOrNull(id))
+
+    // All-stub path when human is stub (or missing) — Phase-legal basics for N seats
+    if (!human) {
+      const stub = goldfishStubDecksForCount(n)
+      setStartNote(
+        n === 2
+          ? 'Using built-in basics stubs (no saved deck selected)'
+          : `Using basics stubs · ${n}-player table`,
+      )
+      return stub
     }
-    setStartNote('Using built-in basics stubs (no saved deck selected)')
-    return goldfishStubDecks()
-  }, [humanDeckId, aiDeckId, decks])
+
+    // Fill missing AI seats by mirroring human (goldfish-style)
+    const aiDecks: Deck[] = aiResolved.map((d) => d ?? human)
+    while (aiDecks.length < n - 1) aiDecks.push(human)
+
+    let deckList = toPhaseMultiDeckList(human, aiDecks, { playerCount: n })
+    const basics = ['Mountain', 'Island', 'Forest', 'Swamp', 'Plains']
+    deckList = {
+      ...deckList,
+      player: sanitizePhasePlayer(deckList.player, 'Mountain'),
+      opponent: sanitizePhasePlayer(deckList.opponent, 'Island'),
+      ai_decks: deckList.ai_decks.map((d, i) =>
+        sanitizePhasePlayer(d, basics[(i + 2) % basics.length]!),
+      ),
+    }
+    const aiNames = aiDecks.map((d, i) => {
+      const id = aiDeckIds[i]
+      return id === STUB_DECK_ID || !resolveDeckOrNull(id ?? '')
+        ? `${d.name} (mirror)`
+        : d.name
+    })
+    setStartNote(`${n}-player · You: ${human.name} · AI: ${aiNames.join(' · ')}`)
+    return deckList
+  }, [humanDeckId, aiDeckIds, decks, playerCount, resolveDeckOrNull])
 
   const boot = async () => {
     setBusy(true)
@@ -200,24 +277,42 @@ export function EnginePlayPage() {
     }
   }
 
-  const launchWithDeckList = async (deckList: PhaseDeckList, label: string) => {
+  const launchWithDeckList = async (
+    deckList: PhaseDeckList,
+    label: string,
+    seats?: number,
+  ) => {
     if (!adapter.isReady) {
       await boot()
       if (!adapter.isReady) return
     }
+    const n =
+      seats ??
+      Math.max(
+        2,
+        1 + 1 + (Array.isArray(deckList.ai_decks) ? deckList.ai_decks.length : 0),
+      )
     setBusy(true)
+    setAiBusy(true)
     try {
       lastDeckList.current = deckList
+      lastPlayerCount.current = n
       setGameLog([])
       const initRaw = adapter.startGame(deckList, {
         seed: Date.now() % 1e9,
-        playerCount: 2,
+        playerCount: n,
       })
       ingestResults([initRaw])
+      const extras = (deckList.ai_decks ?? [])
+        .map((d) => d.commander[0] ?? '?')
+        .join(', ')
       pushLog(
-        `${label}: ${deckList.player.commander[0] ?? '?'} vs ${deckList.opponent.commander[0] ?? '?'}`,
+        `${label} (${n}p): ${deckList.player.commander[0] ?? '?'} vs ${deckList.opponent.commander[0] ?? '?'}` +
+          (extras ? ` + ${extras}` : ''),
       )
-      const driven = adapter.driveOpponents({ maxSteps: 40 })
+      const driven = adapter.driveOpponents({
+        maxSteps: 40 + (n - 2) * 30,
+      })
       if (driven.results.length) ingestResults(driven.results)
       if (driven.steps)
         pushLog(`Auto-drove opponents ${driven.steps} steps (${driven.stoppedReason})`)
@@ -227,6 +322,7 @@ export function EnginePlayPage() {
     } catch (err) {
       pushLog(`Start failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
+      setAiBusy(false)
       setBusy(false)
     }
   }
@@ -234,12 +330,13 @@ export function EnginePlayPage() {
   const startGame = async () => {
     setStartNote(null)
     const deckList = buildDeckList()
-    await launchWithDeckList(deckList, 'Game started')
+    await launchWithDeckList(deckList, 'Game started', playerCount)
   }
 
   const rematch = async () => {
     const deckList = lastDeckList.current ?? buildDeckList()
-    await launchWithDeckList(deckList, 'Rematch')
+    const seats = lastPlayerCount.current || playerCount
+    await launchWithDeckList(deckList, 'Rematch', seats)
   }
 
   const concede = async () => {
@@ -269,9 +366,17 @@ export function EnginePlayPage() {
       const result = adapter.submitAction(action, 0)
       ingestResults([result])
       pushLog(`You: ${summarizeAction(action)}`)
-      const driven = adapter.driveOpponents({ maxSteps: 60 })
-      if (driven.results.length) ingestResults(driven.results)
-      if (driven.steps) pushLog(`AI drove ${driven.steps} (${driven.stoppedReason})`)
+      setAiBusy(true)
+      try {
+        const n = lastPlayerCount.current || playerCount
+        const driven = adapter.driveOpponents({
+          maxSteps: 60 + (n - 2) * 40,
+        })
+        if (driven.results.length) ingestResults(driven.results)
+        if (driven.steps) pushLog(`AI drove ${driven.steps} (${driven.stoppedReason})`)
+      } finally {
+        setAiBusy(false)
+      }
       await syncFromEngine()
     } catch (err) {
       pushLog(`Reject: ${err instanceof Error ? err.message : String(err)}`)
@@ -290,9 +395,17 @@ export function EnginePlayPage() {
         ingestResults([result])
         pushLog(`You: ${summarizeAction(action)}`)
       }
-      const driven = adapter.driveOpponents({ maxSteps: 60 })
-      if (driven.results.length) ingestResults(driven.results)
-      if (driven.steps) pushLog(`AI drove ${driven.steps} (${driven.stoppedReason})`)
+      setAiBusy(true)
+      try {
+        const n = lastPlayerCount.current || playerCount
+        const driven = adapter.driveOpponents({
+          maxSteps: 60 + (n - 2) * 40,
+        })
+        if (driven.results.length) ingestResults(driven.results)
+        if (driven.steps) pushLog(`AI drove ${driven.steps} (${driven.stoppedReason})`)
+      } finally {
+        setAiBusy(false)
+      }
       await syncFromEngine()
     } catch (err) {
       pushLog(`Reject: ${err instanceof Error ? err.message : String(err)}`)
@@ -304,32 +417,43 @@ export function EnginePlayPage() {
 
   const driveAi = async () => {
     setBusy(true)
+    setAiBusy(true)
     try {
-      const driven = adapter.driveOpponents({ maxSteps: 40 })
+      const n = lastPlayerCount.current || playerCount
+      const driven = adapter.driveOpponents({
+        maxSteps: 40 + (n - 2) * 30,
+      })
       if (driven.results.length) ingestResults(driven.results)
       pushLog(`Drive: ${driven.steps} (${driven.stoppedReason})`)
       await syncFromEngine()
     } finally {
+      setAiBusy(false)
       setBusy(false)
     }
   }
 
   const runGoldfish = async () => {
     setBusy(true)
+    setAiBusy(true)
     setGoldfish(null)
     try {
       if (!adapter.isReady) await boot()
+      // Prefer current IndexedDB picks when human has a saved deck
+      const deckList = buildDeckList()
       const result = await runHeadlessGoldfish({
         adapter,
         maxSteps: 800,
         maxTurns: 25,
         onProgress: (m) => setProgress(m),
+        decks: deckList,
+        playerCount,
       })
       setGoldfish(result)
       pushLog(
         `Goldfish: ${result.stoppedReason} turns=${result.turns} steps=${result.steps} winner=${result.winner}`,
       )
     } finally {
+      setAiBusy(false)
       setBusy(false)
     }
   }
@@ -353,7 +477,7 @@ export function EnginePlayPage() {
         <div className="min-w-0">
           <h1 className="text-lg font-semibold text-white">Phase Engine</h1>
           <p className="text-xs text-slate-400">
-            Saved decks · mana pool · Phase game log · concede / rematch
+            Multi-seat Commander · mana pool · Phase log · concede / rematch
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
@@ -451,6 +575,28 @@ export function EnginePlayPage() {
             </div>
           )}
 
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-slate-400">Seats</span>
+            {[2, 3, 4].map((n) => (
+              <button
+                key={n}
+                type="button"
+                disabled={busy}
+                onClick={() => changePlayerCount(n)}
+                className={
+                  playerCount === n
+                    ? 'min-h-10 rounded-md bg-cyan-700 px-3 text-sm font-semibold text-white'
+                    : 'min-h-10 rounded-md bg-slate-800 px-3 text-sm text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700 disabled:opacity-50'
+                }
+              >
+                {n}p
+              </button>
+            ))}
+            <span className="text-[10px] text-slate-500">
+              You = seat 0 · Phase AI on every other seat
+            </span>
+          </div>
+
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="text-xs text-slate-400">
               Your deck (seat 0)
@@ -462,16 +608,18 @@ export function EnginePlayPage() {
                 {deckOptions}
               </select>
             </label>
-            <label className="text-xs text-slate-400">
-              AI deck (seat 1)
-              <select
-                className="mt-1 min-h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-white"
-                value={aiDeckId || STUB_DECK_ID}
-                onChange={(e) => pickAi(e.target.value)}
-              >
-                {deckOptions}
-              </select>
-            </label>
+            {Array.from({ length: Math.max(1, playerCount - 1) }).map((_, i) => (
+              <label key={`ai-${i}`} className="text-xs text-slate-400">
+                AI deck (seat {i + 1})
+                <select
+                  className="mt-1 min-h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-white"
+                  value={aiDeckIds[i] || STUB_DECK_ID}
+                  onChange={(e) => pickAiSeat(i, e.target.value)}
+                >
+                  {deckOptions}
+                </select>
+              </label>
+            ))}
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
@@ -489,7 +637,7 @@ export function EnginePlayPage() {
               onClick={() => void startGame()}
               className="min-h-11 flex-1 rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50 sm:flex-none"
             >
-              Start vs AI
+              Start {playerCount}p table
             </button>
             {lastDeckList.current && (
               <button
@@ -513,6 +661,16 @@ export function EnginePlayPage() {
         </div>
       )}
 
+      {aiBusy && (
+        <div className="flex items-center gap-2 rounded-lg border border-violet-500/35 bg-violet-950/40 px-3 py-2 text-xs text-violet-100">
+          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-violet-400" />
+          <span className="font-medium">AI thinking…</span>
+          <span className="text-violet-200/60">
+            Phase driving non-human seats (WaitingFor handled by engine AI)
+          </span>
+        </div>
+      )}
+
       {board && (
         <EngineBoard
           view={board}
@@ -528,7 +686,8 @@ export function EnginePlayPage() {
 
       {!board && (
         <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/40 p-6 text-center text-sm text-slate-500">
-          Choose decks above, then <strong className="text-slate-300">Start vs AI</strong>.
+          Choose seats + decks, then{' '}
+          <strong className="text-slate-300">Start {playerCount}p table</strong>.
           Phase boots automatically if needed.
         </div>
       )}

@@ -57,3 +57,39 @@ export function sanitizePhasePlayer(
     commander: deck.commander,
   }
 }
+
+const STUB_COMMANDERS = [
+  ['Krenko, Mob Boss', 'Mountain'],
+  ['Aesi, Tyrant of Gyre Strait', 'Island'],
+  ['Selvala, Heart of the Wilds', 'Forest'],
+  ['Purphoros, God of the Forge', 'Mountain'],
+] as const
+
+/** Basics stubs for local N-seat (2–4) tables — always Commander-legal. */
+export function goldfishStubDecksForCount(
+  playerCount: number,
+  aiDifficulty: string = PHASE_AI_DIFFICULTY,
+): PhaseDeckList {
+  const n = Math.max(2, Math.min(4, Math.floor(playerCount)))
+  const mk = (cmd: string, basic: string): PhasePlayerDeck => {
+    const d = emptyPhasePlayerDeck()
+    d.commander = [cmd]
+    d.main_deck = Array.from({ length: 99 }, () => basic)
+    return d
+  }
+  const seats = STUB_COMMANDERS.slice(0, n).map(([cmd, basic]) => mk(cmd, basic))
+  // Aesi uses Island+Forest in 2p stub; keep that flavor for seat 1 when n>=2
+  if (n >= 2) {
+    seats[1].main_deck = [
+      ...Array.from({ length: 50 }, () => 'Island'),
+      ...Array.from({ length: 49 }, () => 'Forest'),
+    ]
+  }
+  return {
+    player: seats[0],
+    opponent: seats[1],
+    ai_decks: seats.slice(2),
+    ai_difficulties: Array.from({ length: n - 1 }, () => aiDifficulty),
+  }
+}
+

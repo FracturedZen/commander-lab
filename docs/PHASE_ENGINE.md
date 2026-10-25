@@ -43,7 +43,7 @@ Manifest: `public/engine/manifest.json`.
 
 First boot downloads WASM + pinned card-data; card-data is stored in IndexedDB (`commander-lab-phase`). Service worker CacheFirst caches the WASM binary after first fetch.
 
-Headless goldfish uses 100-card basic-land stubs (Krenko Mountains vs Aesi Islands/Forests) so Commander legality always passes. Lab sample decks are sanitized (strip known bans / off-identity lands, pad basics) before `initialize_game`.
+Headless goldfish defaults to 100-card basic-land stubs (Krenko / Aesi / Selvala / Purphoros — one per seat up to 4) so Commander legality always passes; Engine setup can pass IndexedDB decks instead. Lab sample decks are sanitized (strip known bans / off-identity lands, pad basics) before `initialize_game`.
 
 ## Local Phase clone / build (optional)
 
@@ -91,23 +91,24 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `PhaseAdapter.ts` | boot, load DB, startGame, legal, submit, AI, driveOpponents |
 | `loadPhaseWasm.ts` | glue + WASM instantiate |
 | `cardDataCache.ts` | meta fetch + IndexedDB |
-| `deckMap.ts` | Lab decks → Phase name-only `DeckList` |
-| `headlessGoldfish.ts` | N-step AI vs AI without UI |
+| `deckMap.ts` | Lab decks → Phase name-only `DeckList` (`toPhaseDeckList` 1v1; `toPhaseMultiDeckList` 2–4) |
+| `goldfishDecks.ts` | Basics stubs for 2–4 seats (`goldfishStubDecksForCount`) + `sanitizePhasePlayer` |
+| `headlessGoldfish.ts` | N-step AI vs AI without UI; optional IndexedDB decks + `playerCount` |
 | `phaseStateView.ts` | ClientGameState → Arena board view + art hydrate |
 | `engineInteraction.ts` | Targeting / combat / mana / discard / mode helpers (display-only) |
 | `phaseGameLog.ts` | ActionResult `log_entries` / events → compact UI lines; mana pool aggregates; Concede builder |
 | `config.ts` | `ENGINE_MODE`, CDN URLs |
 | `phase-worker.js` | optional Web Worker protocol (public/) |
-| `../features/engine/EngineBoard.tsx` | Arena board + phone sticky action dock (WaitingFor banners + Pass); stack rail, targeting, combat, mana chrome, ActivateAbility, priority banner, command cast+spellCosts, Concede/Rematch |
+| `../features/engine/EngineBoard.tsx` | Arena board + phone sticky action dock (WaitingFor banners + Pass); multi-seat opponent chrome; stack rail, targeting, combat, mana chrome, ActivateAbility, priority banner, command cast+spellCosts, Concede/Rematch |
 
-## How to play (v0.7.0+)
+## How to play (v0.7.1+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** (first time: ~39 MB WASM + ~96 MB card-data).
-3. **Your deck / AI deck** lists every deck in IndexedDB (builder, imports, precons/samples). Labels show commander + size. Refresh / Manage decks / Builder links included. **Basics stub** is an explicit fallback. Picks persist in localStorage. → **Start vs AI** (boots Phase if needed).
+3. **Seats** 2p / 3p / 4p (clamped to Phase `FormatConfig.min_players`/`max_players`). Human stays seat 0; every other seat is Phase AI. Per-seat deck selects list IndexedDB decks (builder, imports, precons/samples) with commander + size labels. Refresh / Manage decks / Builder links included. **Basics stub** is an explicit fallback. Seat count + picks persist in localStorage. → **Start Np table** (boots Phase if needed). DeckList: `player` + `opponent` + `ai_decks` for seats 2+ (`ai_difficulties` one per non-human seat).
 4. Arena-style board reflects Phase zones (hand fan, BF art chips, lands, command, life). **Cyan** = legal; **rose** = targets / discard / zone / Phyrexian; **orange** = combat / OrderTriggers; **amber** = mana pay / pool pin / PayAmount; **fuchsia** = Choose X; **teal** = Assist; **cyan** = Scry/Surveil; **indigo** = reorder (Ripple/DigRest/Planar); **emerald** = Search/Dig/Reveal/zone pick; **lime** = ReplacementChoice. **Pay:** Auto | Manual | Sac-safe stamps `payment_mode` on casts (Phase APIs only). Manual / Sac-safe → `ManaPayment` / `ManaSourceSelection` with board glow + Confirm / CancelCast. **SpendPoolMana / UnspendPoolMana** pin UI from `mana_pool` + `pinned_pool_units`. **PhyrexianPayment** per-shard Mana/Life toggles → `SubmitPhyrexianChoices`. **ChooseXValue** → `ChooseX`. **AssistChoosePlayer** / **AssistPayment** → `ChooseAssistPlayer` / `CommitAssistPayment`. **ScryChoice** / **SurveilChoice** keep-on-top → `SelectCards`. **RippleBottomOrder** / **RevealUntilBottomOrder** / **DigRestSplitChoice** / **ArrangePlanarDeckTopChoice** reorder → `SelectCards`. **SearchChoice** / **SearchPartitionChoice** / **DigChoice** / **RevealChoice** / **ChooseFromZoneChoice** subset pick → `SelectCards`. **OrderTriggers** → `OrderTriggers {order}`. **ReplacementChoice** → `ChooseReplacement` / `ChooseReplacementAndRemember` (Phase candidates only). **PayAmountChoice** → `SubmitPayAmount`. **CrewVehicle/SaddleMount** board multi-select (sum Phase `contributions`) → `CrewVehicle`/`SaddleMount`. **EquipTarget/StationTarget** single glow-pick → `Equip`/`ActivateStation`. **OptionalCostChoice** Pay/Don't → `DecideOptionalCost`. **UnlessPayment** / **UnlessPaymentChooseCost** → `PayUnlessCost` / `ChooseUnlessCostBranch`. **TargetSelection/TriggerTargetSelection** slot step (object glow + player buttons, optional Skip) → `ChooseTarget`. **MultiTargetSelection** → `SelectCards`. **OptionalEffectChoice/OpponentMayChoice/TributeChoice** → `DecideOptionalEffect`. **PairChoice/CopyTargetChoice/DamageSourceChoice** glow-pick (+ Skip when Phase allows) → `ChoosePair`/`ChooseTarget`/`ChooseDamageSource`. **ActivateAbility** board glow → submit with `payment_mode` (same ManaPayment / TargetSelection / OptionalCost WaitingFor as casts; no invented costs). **Priority banner** when you hold priority with stack or legal responses (Pass vs hold). **Command zone** chips show Phase `spellCosts` (tax/reductions) + **Cast** badge when `CastSpell` is legal. Discard / mode / EffectZoneChoice glow+confirm. Multi-target attack picker. Mulligan banner. **Stack rail** (right) from `derived.stack_display_groups` + `stack_entry_details` — names/art when hydratable, **Top** highlight. **AssignCombatDamage** / **AssignBlockerDamage** board glow + amount steppers / as-though-unblocked (Phase modes only). Seat chrome: life + **poison** + **commander damage** from Phase player / `derived.commander_damage_by_attacker`. **Pass** sticky bottom dock on phone (banners/wizards scroll above Pass; desktop keeps top banners + FAB). Rail **stops** from real `waiting_for` (display-only). **Show all actions** fallback. `objectNames` map labels off-board library picks.
 5. No free DnD on this page — only engine-legal submits.
-6. **Headless goldfish** runs stub basics decks with Phase Medium AI until turn/step limit.
+6. **Headless goldfish** drives every seat with Phase Medium AI until turn/step limit. Uses the same IndexedDB / stub deck picks + seat count as the setup panel (falls back to Krenko/Aesi/… basics stubs).
 7. **Game log** (collapsible) merges Phase `log_entries` from each ActionResult; falls back to summarizing `events` when entries are absent. Phone-friendly; auto-scrolls when open.
 8. **Mana pool** chrome always shows seat 0 `mana_pool` (color pips + counts) on the board and sticky dock — not only during payment.
 9. **Concede** submits Phase `Concede { player_id }` then clears table back to setup. **Rematch** reuses the last deck list via `startGame` (no Boot dance when WASM is already ready).
@@ -126,6 +127,7 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) before 
 - Phase rail stops are display-only (derived from WaitingFor); they do not gate Pass or invent phase authority.
 - Engine boot picks decks from IndexedDB (v0.6.9+); stub only when chosen.
 - Game log / mana chrome / Concede+Rematch (v0.7.0): Phase-authored only; rematch keeps deck picks without re-Boot when ready.
+- Multi-seat Commander (v0.7.1): 2–4 seats via Phase `initialize_game` player_count; board chrome for every opponent (life / poison / cmd dmg / hand count); AI-thinking banner while `driveOpponents` runs. Vote / draft / banding still stubbed (Show all actions / empty bands).
 - Lazy-load / compress card-data further; optional Worker boot path.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.
 - Local `build-wasm.sh` may take a long time on the box; CDN path is the supported deploy path.

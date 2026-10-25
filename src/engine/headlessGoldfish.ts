@@ -60,8 +60,9 @@ function isGameOver(state: unknown): boolean {
 }
 
 /**
- * Headless goldfish: boot Phase, start Krenko vs Aesi, drive both seats with
- * Phase AI until game over or limits. Prefer Phase built-in AI (no OpenRouter).
+ * Headless goldfish: boot Phase, start a local table (stubs or caller decks),
+ * drive every seat with Phase AI until game over or limits. Prefer Phase
+ * built-in AI (no OpenRouter). Supports 2–4 seats when decks/playerCount set.
  */
 export async function runHeadlessGoldfish(opts: {
   maxSteps?: number
@@ -70,6 +71,9 @@ export async function runHeadlessGoldfish(opts: {
   difficulty?: string
   onProgress?: (msg: string) => void
   adapter?: PhaseAdapter
+  /** When set, use these decks instead of built-in stubs (IndexedDB picks). */
+  decks?: PhaseDeckList
+  playerCount?: number
 } = {}): Promise<GoldfishResult> {
   const log: string[] = []
   const push = (m: string) => {
@@ -82,13 +86,20 @@ export async function runHeadlessGoldfish(opts: {
     if (!adapter.isReady) {
       await adapter.boot(push)
     }
-    const decks = sampleDeckList(opts.difficulty ?? PHASE_AI_DIFFICULTY)
+    const decks = opts.decks ?? sampleDeckList(opts.difficulty ?? PHASE_AI_DIFFICULTY)
+    const playerCount = Math.max(
+      2,
+      opts.playerCount ??
+        2 + (Array.isArray(decks.ai_decks) ? decks.ai_decks.length : 0),
+    )
+    const extras = (decks.ai_decks ?? []).map((d) => d.commander[0] ?? '?').join(', ')
     push(
-      `Starting game: ${decks.player.commander[0]} vs ${decks.opponent.commander[0]}`,
+      `Starting game (${playerCount}p): ${decks.player.commander[0]} vs ${decks.opponent.commander[0]}` +
+        (extras ? ` + ${extras}` : ''),
     )
     adapter.startGame(decks, {
       seed: opts.seed ?? 42,
-      playerCount: 2,
+      playerCount,
       firstPlayer: 0,
     })
 
@@ -130,10 +141,13 @@ export async function runHeadlessGoldfish(opts: {
       // Alternate: ask AI for whoever has priority; fall back to pass.
       const st = (state as { state?: Record<string, unknown> }).state ?? (state as Record<string, unknown>)
       const priority =
-        (typeof st.priority_player === 'number' && st.priority_player) ||
-        (typeof st.priority === 'number' && st.priority) ||
-        (typeof st.active_player === 'number' && st.active_player) ||
-        0
+        (typeof st.priority_player === 'number'
+          ? st.priority_player
+          : typeof st.priority === 'number'
+            ? st.priority
+            : typeof st.active_player === 'number'
+              ? st.active_player
+              : 0)
 
       let proposal = adapter.proposeAiAction(
         priority,

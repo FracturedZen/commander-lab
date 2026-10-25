@@ -132,6 +132,15 @@ export class PhaseAdapter {
     return this.formatConfig
   }
 
+  /** Commander (and other) seat range from Phase FormatConfig. */
+  seatBounds(): { min: number; max: number } {
+    const cfg = this.formatConfig
+    if (!cfg) return { min: 2, max: 4 }
+    const min = typeof cfg.min_players === 'number' ? cfg.min_players : 2
+    const max = typeof cfg.max_players === 'number' ? cfg.max_players : 4
+    return { min: Math.max(2, min), max: Math.max(min, max) }
+  }
+
   getCardHash(): string | null {
     return this.cardHash
   }

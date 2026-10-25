@@ -85,3 +85,38 @@ export function sampleToPhasePlayer(opts: {
     bracket_tier: 'core',
   }
 }
+
+/**
+ * Build a local multi-seat DeckList for Phase `initialize_game`.
+ * Seat 0 = human (`player`), seat 1 = `opponent`, seats 2..N-1 = `ai_decks`
+ * (one entry per additional seat — Phase refuses empty libraries).
+ * `aiDecks` length must be playerCount-1 (all non-human seats).
+ */
+export function toPhaseMultiDeckList(
+  human: Deck,
+  aiDecks: Deck[],
+  opts: { playerCount?: number; aiDifficulty?: string } = {},
+): PhaseDeckList {
+  const playerCount = opts.playerCount ?? aiDecks.length + 1
+  const difficulty = opts.aiDifficulty ?? PHASE_AI_DIFFICULTY
+  if (aiDecks.length < 1) {
+    throw new Error('Need at least one AI deck (2-player minimum)')
+  }
+  if (aiDecks.length !== playerCount - 1) {
+    throw new Error(
+      `Expected ${playerCount - 1} AI deck(s) for ${playerCount}-player table, got ${aiDecks.length}`,
+    )
+  }
+  const player = deckToPhasePlayer(human)
+  const opponent = deckToPhasePlayer(aiDecks[0])
+  const extra = aiDecks.slice(1).map(deckToPhasePlayer)
+  return {
+    player,
+    opponent,
+    // Phase: seat1 = opponent; ai_decks[i] = seat i+2. Also keep opponent in
+    // ai_difficulties alignment: one difficulty per non-human seat.
+    ai_decks: extra,
+    ai_difficulties: Array.from({ length: playerCount - 1 }, () => difficulty),
+  }
+}
+

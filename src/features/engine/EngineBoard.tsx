@@ -289,7 +289,7 @@ export function EngineBoard({
   onRematch,
 }: Props) {
   const you = view.seats[0]
-  const opp = view.seats[1]
+  const opponents = view.seats.slice(1)
   const [inspect, setInspect] = useState<PhaseObjectView | null>(null)
   const [picker, setPicker] = useState<{
     objectId: string
@@ -1255,13 +1255,15 @@ export function EngineBoard({
   }
 
   function objectLabel(id: string): string {
-    return (
-      view.objectNames?.[id] ||
-      you?.battlefield.find((c) => c.objectId === id)?.card.name ||
-      you?.hand.find((c) => c.objectId === id)?.card.name ||
-      opp?.battlefield.find((c) => c.objectId === id)?.card.name ||
-      `#${id}`
-    )
+    for (const seat of view.seats) {
+      const hit =
+        seat.battlefield.find((c) => c.objectId === id) ||
+        seat.hand.find((c) => c.objectId === id) ||
+        seat.command.find((c) => c.objectId === id) ||
+        seat.graveyard.find((c) => c.objectId === id)
+      if (hit) return hit.card.name
+    }
+    return view.objectNames?.[id] || `#${id}`
   }
 
   function moveInOrder(ids: string[], index: number, dir: -1 | 1): string[] {
@@ -3042,13 +3044,23 @@ export function EngineBoard({
     )
   }
 
+  if (!you) {
+    return (
+      <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/50 p-6 text-center text-sm text-slate-500">
+        Waiting for Phase seats…
+      </div>
+    )
+  }
+
   return (
     <div className="relative flex flex-col gap-2">
       <PhaseRail
         phase={view.phase}
         turnNumber={view.turnNumber}
         activeName={
-          view.activePlayer === 0 ? 'You' : opp ? `AI ${opp.id}` : `P${view.activePlayer}`
+          view.activePlayer === 0
+            ? 'You'
+            : `Seat ${view.activePlayer}`
         }
         yourTurn={view.priorityPlayer === 0}
         lastAutoNote={
@@ -3120,47 +3132,83 @@ export function EngineBoard({
         }}
       >
         <div className="relative flex min-h-[28rem] flex-col gap-2 p-2 sm:p-3">
-          {opp && (
-            <div className="flex flex-wrap items-center justify-center gap-3">
-              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/35 px-3 py-1 text-[11px] text-emerald-100/80">
-                <div className="text-center">
-                  <div className="font-semibold">AI{opp.isEliminated ? ' ✕' : ''}</div>
-                  <div className="text-lg font-bold tabular-nums text-white">{opp.life}</div>
-                  <div className="text-[10px] text-emerald-200/50">
-                    H{opp.hand.length} · L{opp.libraryCount}
-                  </div>
-                </div>
-                <SeatStatusBadges
-                  poison={opp.poison}
-                  commanderDamage={opp.commanderDamage}
-                />
-              </div>
-              {opp.hand.length > 0 && (
-                <div className="flex max-w-[12rem] flex-wrap justify-center gap-0.5">
-                  {Array.from({ length: Math.min(opp.hand.length, 10) }).map((_, i) => (
-                    <div
-                      key={`opp-h-${i}`}
-                      className="h-8 w-[1.4rem] rounded-sm border border-slate-600/80 bg-gradient-to-b from-slate-800 to-slate-950 shadow"
-                      title="Opponent hand"
+          {opponents.length > 0 && (
+            <div
+              className={
+                opponents.length === 1
+                  ? 'flex flex-wrap items-start justify-center gap-3'
+                  : 'grid gap-2 ' +
+                    (opponents.length === 2
+                      ? 'grid-cols-1 sm:grid-cols-2'
+                      : 'grid-cols-1 sm:grid-cols-3')
+              }
+            >
+              {opponents.map((opp) => (
+                <div
+                  key={`seat-${opp.id}`}
+                  className={
+                    'flex flex-wrap items-center justify-center gap-2 rounded-xl border px-2 py-1.5 ' +
+                    (view.priorityPlayer === opp.id
+                      ? 'border-violet-400/45 bg-violet-950/35'
+                      : view.activePlayer === opp.id
+                        ? 'border-amber-400/35 bg-amber-950/25'
+                        : 'border-white/10 bg-black/35')
+                  }
+                >
+                  <div className="flex items-center gap-2 text-[11px] text-emerald-100/80">
+                    <div className="text-center">
+                      <div className="font-semibold">
+                        Seat {opp.id}
+                        {opp.isEliminated ? ' ✕' : ''}
+                        {view.priorityPlayer === opp.id ? ' · P' : ''}
+                        {view.activePlayer === opp.id && view.priorityPlayer !== opp.id
+                          ? ' · A'
+                          : ''}
+                      </div>
+                      <div className="text-lg font-bold tabular-nums text-white">
+                        {opp.life}
+                      </div>
+                      <div className="text-[10px] text-emerald-200/50">
+                        H{opp.hand.length} · L{opp.libraryCount}
+                      </div>
+                    </div>
+                    <SeatStatusBadges
+                      poison={opp.poison}
+                      commanderDamage={opp.commanderDamage}
                     />
-                  ))}
-                  {opp.hand.length > 10 && (
-                    <span className="self-center text-[9px] text-emerald-100/40">
-                      +{opp.hand.length - 10}
-                    </span>
+                  </div>
+                  {opp.hand.length > 0 && (
+                    <div className="flex max-w-[10rem] flex-wrap justify-center gap-0.5">
+                      {Array.from({
+                        length: Math.min(opp.hand.length, opponents.length > 1 ? 7 : 10),
+                      }).map((_, i) => (
+                        <div
+                          key={`opp-${opp.id}-h-${i}`}
+                          className="h-7 w-[1.25rem] rounded-sm border border-slate-600/80 bg-gradient-to-b from-slate-800 to-slate-950 shadow"
+                          title={`Seat ${opp.id} hand`}
+                        />
+                      ))}
+                      {opp.hand.length > (opponents.length > 1 ? 7 : 10) && (
+                        <span className="self-center text-[9px] text-emerald-100/40">
+                          +{opp.hand.length - (opponents.length > 1 ? 7 : 10)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {opp.command.length > 0 && (
+                    <div className="flex gap-1">
+                      {opp.command.map((c) => renderChip(c, 'command'))}
+                    </div>
+                  )}
+                  {opp.battlefield.length > 0 && (
+                    <div className="flex max-w-full flex-wrap justify-center gap-1">
+                      {opp.nonLands
+                        .slice(0, opponents.length > 1 ? 8 : 12)
+                        .map((c) => renderChip(c, 'board'))}
+                    </div>
                   )}
                 </div>
-              )}
-              {opp.command.length > 0 && (
-                <div className="flex gap-1">
-                  {opp.command.map((c) => renderChip(c, 'command'))}
-                </div>
-              )}
-              {opp.battlefield.length > 0 && (
-                <div className="flex max-w-full flex-wrap justify-center gap-1.5">
-                  {opp.nonLands.slice(0, 12).map((c) => renderChip(c, 'board'))}
-                </div>
-              )}
+              ))}
             </div>
           )}
 
