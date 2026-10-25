@@ -101,7 +101,7 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `phase-worker.js` | optional Web Worker protocol (public/) |
 | `../features/engine/EngineBoard.tsx` | Arena board + phone sticky action dock (WaitingFor banners + Pass); multi-seat opponent chrome; stack rail, targeting, combat, mana chrome, ActivateAbility, priority banner, command cast+spellCosts, Concede/Rematch |
 
-## How to play (v0.7.1+)
+## How to play (v0.7.2+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** (first time: ~39 MB WASM + ~96 MB card-data).
@@ -121,13 +121,14 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) before 
 ## Limits & next work
 
 - Targeting wizard matches Phase legal CastSpell target combinations (prefix filter); does not invent targets.
-- Combat: 2p attacks with optional AttackTarget picker; blocker pairs from `waiting_for`; **AssignCombatDamage** / **AssignBlockerDamage** when Phase opens those WaitingFor kinds (lethal hints + trample/controller steppers; no invented splits). **Banding** still submits empty `bands` — Phase does not expose band candidates; leave stubbed.
+- Combat: **multi-opponent DeclareAttackers** — when Phase lists multiple `AttackTarget`s (players / planeswalkers / battles), each attacker must pick an explicit Phase-legal target (banner buttons, seat chrome, or PW/Battle chip). No silent “always seat 1” default; single-target still auto-assigns. Blockers show attacker name + controller seat. **AssignCombatDamage** / **AssignBlockerDamage** when Phase opens those WaitingFor kinds (lethal hints + trample/controller steppers; no invented splits). **Banding** still submits empty `bands` — Phase does not expose band candidates; leave stubbed.
 - Stack visibility from Phase `derived.stack_display_groups` / `stack_entry_details` only.
 - Board UX covers Scry/Surveil, Ripple/RevealUntil/DigRest/ArrangePlanar, Search(+partition)/Dig/Reveal/ChooseFromZone, OrderTriggers, ReplacementChoice, PayAmountChoice, **CrewVehicle/SaddleMount** (Phase `contributions` sum), **EquipTarget/StationTarget**, **OptionalCostChoice**, **UnlessPayment** / **UnlessPaymentChooseCost**, **TargetSelection/TriggerTargetSelection** (`ChooseTarget` via `selection.current_legal_targets`), **MultiTargetSelection**, **OptionalEffectChoice/OpponentMayChoice/TributeChoice**, **PairChoice/CopyTargetChoice/DamageSourceChoice** from Phase `waiting_for` shapes only — never invents options. ActivateAbility reuses cast payment/target/optional WaitingFor wizards (Phase lists only). Command-zone cast uses Phase `spellCosts` + legal `CastSpell` glow — no client tax math. Remaining rarer WaitingFor (vote / draft / empty-candidate, **Banding**) still fall through to **Show all actions**.
 - Phase rail stops are display-only (derived from WaitingFor); they do not gate Pass or invent phase authority.
 - Engine boot picks decks from IndexedDB (v0.6.9+); stub only when chosen.
 - Game log / mana chrome / Concede+Rematch (v0.7.0): Phase-authored only; rematch keeps deck picks without re-Boot when ready.
 - Multi-seat Commander (v0.7.1): 2–4 seats via Phase `initialize_game` player_count; board chrome for every opponent (life / poison / cmd dmg / hand count); AI-thinking banner while `driveOpponents` runs. Vote / draft / banding still stubbed (Show all actions / empty bands).
+- Multi-opponent attack targeting + 4p phone layout (v0.7.2): per-attacker AttackTarget from Phase only; opponents horizontal-scroll compact row on narrow screens (Pass dock / hand stay reachable).
 - Lazy-load / compress card-data further; optional Worker boot path.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.
 - Local `build-wasm.sh` may take a long time on the box; CDN path is the supported deploy path.

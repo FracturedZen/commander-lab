@@ -37,6 +37,10 @@ export {
   buildDeclareNoneAttackers,
   buildDeclareBlockersAction,
   buildDeclareNoneBlockers,
+  attackTargetsFor,
+  needsAttackTargetPick,
+  formatAttackTargetLabel,
+  attackersReady,
   findMulliganActions,
   derivedEngineStops,
 } from './engineInteraction'

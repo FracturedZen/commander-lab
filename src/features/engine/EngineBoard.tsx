@@ -24,6 +24,13 @@ import {
   buildDeclareBlockersAction,
   buildDeclareNoneAttackers,
   buildDeclareNoneBlockers,
+  attackTargetsFor,
+  needsAttackTargetPick,
+  formatAttackTargetLabel,
+  attackersReady,
+  playerAttackTargetForSeat,
+  objectAttackTargetFor,
+  attackTargetsEqual,
   buildAssignCombatDamage,
   buildAssignBlockerDamage,
   defaultCombatDamageSplit,
@@ -804,7 +811,25 @@ export function EngineBoard({
     }
 
     if (mode.kind === 'attackers') {
+      // While picking a target, allow tapping a PW/Battle on any seat if Phase lists it
       if (mode.pendingAttacker) {
+        const objT = objectAttackTargetFor(
+          mode.pendingAttacker,
+          mode.detail,
+          card.objectId,
+        )
+        if (objT) {
+          const id = mode.pendingAttacker
+          setMode({
+            ...mode,
+            pendingAttacker: null,
+            attackTargets: { ...mode.attackTargets, [id]: objT },
+            selected: mode.selected.includes(id)
+              ? mode.selected
+              : [...mode.selected, id],
+          })
+          return
+        }
         setInspect(card)
         return
       }
@@ -812,25 +837,36 @@ export function EngineBoard({
         setInspect(card)
         return
       }
-      const targets =
-        mode.detail.validAttackTargetsByAttacker?.[card.objectId] ??
-        mode.detail.validAttackTargets
-      if (targets.length > 1 && !mode.selected.includes(card.objectId)) {
-        // Multi-target: select attacker then pick target in banner
+      // Deselect
+      if (mode.selected.includes(card.objectId)) {
+        const { [card.objectId]: _drop, ...rest } = mode.attackTargets
         setMode({
           ...mode,
-          pendingAttacker: card.objectId,
-          selected: mode.selected.includes(card.objectId)
-            ? mode.selected
-            : [...mode.selected, card.objectId],
+          selected: mode.selected.filter((id) => id !== card.objectId),
+          attackTargets: rest,
+          pendingAttacker: mode.pendingAttacker === card.objectId ? null : mode.pendingAttacker,
         })
         return
       }
+      const targets = attackTargetsFor(card.objectId, mode.detail)
+      if (targets.length === 0) {
+        setInspect(card)
+        return
+      }
+      if (targets.length === 1) {
+        setMode({
+          ...mode,
+          selected: [...mode.selected, card.objectId],
+          attackTargets: { ...mode.attackTargets, [card.objectId]: targets[0]! },
+          pendingAttacker: null,
+        })
+        return
+      }
+      // Multi-target: require explicit Phase AttackTarget pick (no silent seat-1 default)
       setMode({
         ...mode,
-        selected: mode.selected.includes(card.objectId)
-          ? mode.selected.filter((id) => id !== card.objectId)
-          : [...mode.selected, card.objectId],
+        pendingAttacker: card.objectId,
+        selected: [...mode.selected, card.objectId],
       })
       return
     }
@@ -1146,30 +1182,64 @@ export function EngineBoard({
 
   function confirmAttackers() {
     if (mode.kind !== 'attackers') return
-    // Apply per-attacker target overrides when present
-    if (Object.keys(mode.attackTargets).length > 0 && mode.selected.length > 0) {
-      const attacks: Array<[number, import('@/engine/engineInteraction').AttackTarget]> = []
-      for (const id of mode.selected) {
-        const t =
-          mode.attackTargets[id] ??
-          (mode.detail.validAttackTargetsByAttacker?.[id] ??
-            mode.detail.validAttackTargets)[0]
-        if (!t) return
-        const n = Number(id)
-        if (!Number.isFinite(n)) return
-        attacks.push([n, t])
-      }
+    if (mode.pendingAttacker) return
+    if (mode.selected.length === 0) {
       setMode({ kind: 'idle' })
-      onSubmit({ type: 'DeclareAttackers', data: { attacks, bands: [] } })
+      onSubmit(buildDeclareNoneAttackers())
       return
     }
-    const action =
-      mode.selected.length === 0
-        ? buildDeclareNoneAttackers()
-        : buildDeclareAttackersAction(mode.selected, mode.detail)
+    const action = buildDeclareAttackersAction(
+      mode.selected,
+      mode.detail,
+      mode.attackTargets,
+    )
     if (!action) return
     setMode({ kind: 'idle' })
     onSubmit(action)
+  }
+
+  function assignAttackTarget(
+    attackerId: string,
+    target: import('@/engine/engineInteraction').AttackTarget,
+  ) {
+    if (mode.kind !== 'attackers') return
+    const legal = attackTargetsFor(attackerId, mode.detail)
+    if (!legal.some((t) => attackTargetsEqual(t, target))) return
+    setMode({
+      ...mode,
+      pendingAttacker: null,
+      attackTargets: { ...mode.attackTargets, [attackerId]: target },
+      selected: mode.selected.includes(attackerId)
+        ? mode.selected
+        : [...mode.selected, attackerId],
+    })
+  }
+
+  function seatLabel(seatId: number): string {
+    if (seatId === 0) return 'You'
+    return `Seat ${seatId}`
+  }
+
+  function attackTargetLabel(
+    t: import('@/engine/engineInteraction').AttackTarget,
+  ): string {
+    return formatAttackTargetLabel(t, {
+      seatLabel,
+      objectName: (id) => objectLabel(id),
+    })
+  }
+
+  function controllerSeatOf(objectId: string): number | null {
+    for (const s of view.seats) {
+      if (
+        s.battlefield.some((c) => c.objectId === objectId) ||
+        s.hand.some((c) => c.objectId === objectId) ||
+        s.command.some((c) => c.objectId === objectId)
+      ) {
+        return s.id
+      }
+    }
+    return null
   }
 
   function confirmBlockers() {
@@ -1511,11 +1581,17 @@ export function EngineBoard({
         <div className="flex flex-wrap items-center gap-2">
           <span>
             Declare attackers · tap creatures ({mode.selected.length} selected)
-            {mode.pendingAttacker ? ' · pick attack target' : ''}
+            {mode.pendingAttacker
+              ? ` · pick target for ${objectLabel(mode.pendingAttacker)}`
+              : ''}
           </span>
           <button
             type="button"
-            disabled={busy}
+            disabled={
+              busy ||
+              Boolean(mode.pendingAttacker) ||
+              !attackersReady(mode.selected, mode.detail, mode.attackTargets)
+            }
             className="min-h-10 rounded bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
             onClick={confirmAttackers}
           >
@@ -1524,73 +1600,133 @@ export function EngineBoard({
               : `Attack (${mode.selected.length})`}
           </button>
         </div>
+        {mode.selected.length > 0 && !mode.pendingAttacker && (
+          <div className="flex flex-wrap gap-1 text-[10px] text-orange-100/75">
+            {mode.selected.map((id) => {
+              const t = mode.attackTargets[id]
+              const multi = needsAttackTargetPick(id, mode.detail)
+              return (
+                <button
+                  key={`atk-sum-${id}`}
+                  type="button"
+                  className="rounded bg-orange-900/70 px-1.5 py-0.5 ring-1 ring-orange-500/30 hover:bg-orange-800"
+                  title={multi ? 'Change attack target' : undefined}
+                  onClick={() => {
+                    if (!multi) return
+                    setMode({ ...mode, pendingAttacker: id })
+                  }}
+                >
+                  {objectLabel(id)}
+                  {' → '}
+                  {t ? attackTargetLabel(t) : 'pick target…'}
+                </button>
+              )
+            })}
+          </div>
+        )}
         {mode.pendingAttacker && (
-          <div className="flex flex-wrap gap-1">
-            {(
-              mode.detail.validAttackTargetsByAttacker?.[mode.pendingAttacker] ??
-              mode.detail.validAttackTargets
-            ).map((t, i) => (
+          <div className="flex flex-col gap-1.5">
+            <div className="text-[10px] text-orange-100/60">
+              Phase legal targets only · tap a seat chrome / PW chip, or pick below
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {attackTargetsFor(mode.pendingAttacker, mode.detail).map((tgt, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="min-h-9 rounded bg-orange-800/80 px-2.5 py-1.5 text-xs font-medium hover:bg-orange-700"
+                  onClick={() => assignAttackTarget(mode.pendingAttacker!, tgt)}
+                >
+                  {attackTargetLabel(tgt)}
+                </button>
+              ))}
               <button
-                key={i}
                 type="button"
-                className="rounded bg-orange-800/80 px-2 py-1 text-xs hover:bg-orange-700"
+                className="rounded bg-slate-700 px-2 py-1 text-xs"
                 onClick={() => {
                   const id = mode.pendingAttacker!
+                  const { [id]: _drop, ...rest } = mode.attackTargets
                   setMode({
                     ...mode,
                     pendingAttacker: null,
-                    attackTargets: { ...mode.attackTargets, [id]: t },
-                    selected: mode.selected.includes(id)
-                      ? mode.selected
-                      : [...mode.selected, id],
+                    selected: mode.selected.filter((x) => x !== id),
+                    attackTargets: rest,
                   })
                 }}
               >
-                {t.type}
-                {typeof t.data === 'number' ? ` ${t.data}` : ''}
+                Cancel
               </button>
-            ))}
-            <button
-              type="button"
-              className="rounded bg-slate-700 px-2 py-1 text-xs"
-              onClick={() =>
-                setMode({
-                  ...mode,
-                  pendingAttacker: null,
-                  selected: mode.selected.filter((id) => id !== mode.pendingAttacker),
-                })
-              }
-            >
-              Cancel
-            </button>
+            </div>
           </div>
         )}
       </div>
     ) : mode.kind === 'blockers' ? (
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
-        <span>
-          {mode.pendingBlocker
-            ? 'Choose attacker to block'
-            : `Declare blockers · ${mode.assignments.length} assigned`}
-        </span>
-        <button
-          type="button"
-          disabled={busy}
-          className="min-h-10 rounded bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
-          onClick={confirmBlockers}
-        >
-          {mode.assignments.length === 0
-            ? 'Declare none'
-            : `Confirm blocks (${mode.assignments.length})`}
-        </button>
-        {mode.pendingBlocker && (
+      <div className="flex flex-col gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
+        <div className="flex flex-wrap items-center gap-2">
+          <span>
+            {mode.pendingBlocker
+              ? `Block with ${objectLabel(mode.pendingBlocker)} · pick attacker`
+              : `Declare blockers · ${mode.assignments.length} assigned`}
+          </span>
           <button
             type="button"
-            className="rounded bg-slate-700 px-2 py-1 text-xs"
-            onClick={() => setMode({ ...mode, pendingBlocker: null })}
+            disabled={busy || Boolean(mode.pendingBlocker)}
+            className="min-h-10 rounded bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
+            onClick={confirmBlockers}
           >
-            Cancel blocker
+            {mode.assignments.length === 0
+              ? 'Declare none'
+              : `Confirm blocks (${mode.assignments.length})`}
           </button>
+          {mode.pendingBlocker && (
+            <button
+              type="button"
+              className="rounded bg-slate-700 px-2 py-1 text-xs"
+              onClick={() => setMode({ ...mode, pendingBlocker: null })}
+            >
+              Cancel blocker
+            </button>
+          )}
+        </div>
+        {mode.pendingBlocker && (
+          <div className="flex flex-wrap gap-1">
+            {(mode.detail.validBlockTargets[mode.pendingBlocker] ?? []).map((atkId) => {
+              const seat = controllerSeatOf(atkId)
+              return (
+                <button
+                  key={`blk-atk-${atkId}`}
+                  type="button"
+                  className="min-h-9 rounded bg-orange-800/80 px-2.5 py-1.5 text-xs font-medium hover:bg-orange-700"
+                  onClick={() => {
+                    const assignments = mode.assignments.filter(
+                      ([b]) => b !== mode.pendingBlocker,
+                    )
+                    assignments.push([mode.pendingBlocker!, atkId])
+                    setMode({ ...mode, pendingBlocker: null, assignments })
+                  }}
+                >
+                  {objectLabel(atkId)}
+                  {seat != null ? ` · ${seatLabel(seat)}` : ''}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {mode.assignments.length > 0 && !mode.pendingBlocker && (
+          <div className="flex flex-wrap gap-1 text-[10px] text-orange-100/75">
+            {mode.assignments.map(([b, a]) => {
+              const seat = controllerSeatOf(a)
+              return (
+                <span
+                  key={`blk-sum-${b}-${a}`}
+                  className="rounded bg-orange-900/70 px-1.5 py-0.5 ring-1 ring-orange-500/30"
+                >
+                  {objectLabel(b)} blocks {objectLabel(a)}
+                  {seat != null ? ` (${seatLabel(seat)})` : ''}
+                </span>
+              )
+            })}
+          </div>
         )}
       </div>
     ) : mode.kind === 'assignCombatDamage' ? (
@@ -3128,87 +3264,135 @@ export function EngineBoard({
           backgroundColor: '#0d3b2e',
           backgroundImage:
             'radial-gradient(ellipse at center, #1a6b4f 0%, #0a2f24 55%, #061a14 100%)',
-          minHeight: '28rem',
+          minHeight: opponents.length >= 3 ? '24rem' : '28rem',
         }}
       >
-        <div className="relative flex min-h-[28rem] flex-col gap-2 p-2 sm:p-3">
+        <div
+          className={
+            opponents.length >= 3
+              ? 'relative flex min-h-[22rem] flex-col gap-1.5 p-1.5 sm:min-h-[28rem] sm:gap-2 sm:p-3'
+              : 'relative flex min-h-[28rem] flex-col gap-2 p-2 sm:p-3'
+          }
+        >
           {opponents.length > 0 && (
             <div
               className={
                 opponents.length === 1
                   ? 'flex flex-wrap items-start justify-center gap-3'
-                  : 'grid gap-2 ' +
-                    (opponents.length === 2
-                      ? 'grid-cols-1 sm:grid-cols-2'
-                      : 'grid-cols-1 sm:grid-cols-3')
+                  : // Multi-seat: horizontal scroll on phone so Pass dock / hand stay visible
+                    'flex max-w-full gap-2 overflow-x-auto overscroll-x-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:thin] sm:grid sm:overflow-visible sm:pb-0 ' +
+                    (opponents.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-3')
               }
             >
-              {opponents.map((opp) => (
-                <div
-                  key={`seat-${opp.id}`}
-                  className={
-                    'flex flex-wrap items-center justify-center gap-2 rounded-xl border px-2 py-1.5 ' +
-                    (view.priorityPlayer === opp.id
-                      ? 'border-violet-400/45 bg-violet-950/35'
-                      : view.activePlayer === opp.id
-                        ? 'border-amber-400/35 bg-amber-950/25'
-                        : 'border-white/10 bg-black/35')
-                  }
-                >
-                  <div className="flex items-center gap-2 text-[11px] text-emerald-100/80">
-                    <div className="text-center">
-                      <div className="font-semibold">
-                        Seat {opp.id}
-                        {opp.isEliminated ? ' ✕' : ''}
-                        {view.priorityPlayer === opp.id ? ' · P' : ''}
-                        {view.activePlayer === opp.id && view.priorityPlayer !== opp.id
-                          ? ' · A'
-                          : ''}
-                      </div>
-                      <div className="text-lg font-bold tabular-nums text-white">
-                        {opp.life}
-                      </div>
-                      <div className="text-[10px] text-emerald-200/50">
-                        H{opp.hand.length} · L{opp.libraryCount}
-                      </div>
-                    </div>
-                    <SeatStatusBadges
-                      poison={opp.poison}
-                      commanderDamage={opp.commanderDamage}
-                    />
-                  </div>
-                  {opp.hand.length > 0 && (
-                    <div className="flex max-w-[10rem] flex-wrap justify-center gap-0.5">
-                      {Array.from({
-                        length: Math.min(opp.hand.length, opponents.length > 1 ? 7 : 10),
-                      }).map((_, i) => (
+              {opponents.map((opp) => {
+                const atkMode = mode.kind === 'attackers' ? mode : null
+                const pendingAtk = atkMode?.pendingAttacker ?? null
+                const seatTarget =
+                  atkMode && pendingAtk != null
+                    ? playerAttackTargetForSeat(pendingAtk, atkMode.detail, opp.id)
+                    : null
+                const seatPickable = Boolean(seatTarget)
+                return (
+                  <div
+                    key={`seat-${opp.id}`}
+                    role={seatPickable ? 'button' : undefined}
+                    tabIndex={seatPickable ? 0 : undefined}
+                    onClick={() => {
+                      if (!seatTarget || mode.kind !== 'attackers' || !mode.pendingAttacker)
+                        return
+                      assignAttackTarget(mode.pendingAttacker, seatTarget)
+                    }}
+                    onKeyDown={(e) => {
+                      if (!seatPickable) return
+                      if (e.key !== 'Enter' && e.key !== ' ') return
+                      e.preventDefault()
+                      if (mode.kind !== 'attackers' || !mode.pendingAttacker || !seatTarget)
+                        return
+                      assignAttackTarget(mode.pendingAttacker, seatTarget)
+                    }}
+                    className={
+                      'flex shrink-0 flex-wrap items-center justify-center gap-1.5 rounded-xl border px-2 py-1 ' +
+                      (opponents.length > 1
+                        ? 'w-[min(11.5rem,72vw)] sm:w-auto sm:min-w-0 '
+                        : '') +
+                      (seatPickable
+                        ? 'cursor-pointer border-orange-400/70 bg-orange-950/45 ring-2 ring-orange-400/50 '
+                        : view.priorityPlayer === opp.id
+                          ? 'border-violet-400/45 bg-violet-950/35 '
+                          : view.activePlayer === opp.id
+                            ? 'border-amber-400/35 bg-amber-950/25 '
+                            : 'border-white/10 bg-black/35 ')
+                    }
+                  >
+                    <div className="flex items-center gap-1.5 text-[11px] text-emerald-100/80">
+                      <div className="text-center">
+                        <div className="font-semibold leading-tight">
+                          Seat {opp.id}
+                          {opp.isEliminated ? ' ✕' : ''}
+                          {view.priorityPlayer === opp.id ? ' · P' : ''}
+                          {view.activePlayer === opp.id && view.priorityPlayer !== opp.id
+                            ? ' · A'
+                            : ''}
+                          {seatPickable ? ' · Attack' : ''}
+                        </div>
                         <div
-                          key={`opp-${opp.id}-h-${i}`}
-                          className="h-7 w-[1.25rem] rounded-sm border border-slate-600/80 bg-gradient-to-b from-slate-800 to-slate-950 shadow"
-                          title={`Seat ${opp.id} hand`}
-                        />
-                      ))}
-                      {opp.hand.length > (opponents.length > 1 ? 7 : 10) && (
-                        <span className="self-center text-[9px] text-emerald-100/40">
-                          +{opp.hand.length - (opponents.length > 1 ? 7 : 10)}
-                        </span>
-                      )}
+                          className={
+                            opponents.length > 1
+                              ? 'text-base font-bold tabular-nums text-white sm:text-lg'
+                              : 'text-lg font-bold tabular-nums text-white'
+                          }
+                        >
+                          {opp.life}
+                        </div>
+                        <div className="text-[10px] text-emerald-200/50">
+                          H{opp.hand.length} · L{opp.libraryCount}
+                        </div>
+                      </div>
+                      <SeatStatusBadges
+                        poison={opp.poison}
+                        commanderDamage={opp.commanderDamage}
+                      />
                     </div>
-                  )}
-                  {opp.command.length > 0 && (
-                    <div className="flex gap-1">
-                      {opp.command.map((c) => renderChip(c, 'command'))}
-                    </div>
-                  )}
-                  {opp.battlefield.length > 0 && (
-                    <div className="flex max-w-full flex-wrap justify-center gap-1">
-                      {opp.nonLands
-                        .slice(0, opponents.length > 1 ? 8 : 12)
-                        .map((c) => renderChip(c, 'board'))}
-                    </div>
-                  )}
-                </div>
-              ))}
+                    {/* Hand backs: hide on narrow multi-seat to save height for Pass/hand */}
+                    {opp.hand.length > 0 && opponents.length === 1 && (
+                      <div className="flex max-w-[10rem] flex-wrap justify-center gap-0.5">
+                        {Array.from({ length: Math.min(opp.hand.length, 10) }).map((_, i) => (
+                          <div
+                            key={`opp-${opp.id}-h-${i}`}
+                            className="h-7 w-[1.25rem] rounded-sm border border-slate-600/80 bg-gradient-to-b from-slate-800 to-slate-950 shadow"
+                            title={`Seat ${opp.id} hand`}
+                          />
+                        ))}
+                        {opp.hand.length > 10 && (
+                          <span className="self-center text-[9px] text-emerald-100/40">
+                            +{opp.hand.length - 10}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {opp.command.length > 0 && (
+                      <div className="flex gap-1">
+                        {opp.command
+                          .slice(0, opponents.length > 1 ? 2 : 4)
+                          .map((c) => renderChip(c, 'command'))}
+                      </div>
+                    )}
+                    {opp.battlefield.length > 0 && (
+                      <div
+                        className={
+                          opponents.length > 1
+                            ? 'hidden max-w-full flex-wrap justify-center gap-1 sm:flex'
+                            : 'flex max-w-full flex-wrap justify-center gap-1'
+                        }
+                      >
+                        {opp.nonLands
+                          .slice(0, opponents.length > 1 ? 6 : 12)
+                          .map((c) => renderChip(c, opponents.length > 1 ? 'tiny' : 'board'))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
 

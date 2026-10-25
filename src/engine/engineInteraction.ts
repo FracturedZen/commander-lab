@@ -1443,15 +1443,102 @@ export function attackTargetsFor(
   return detail.validAttackTargets
 }
 
-/** Build DeclareAttackers from selected attackers (2p / single-target path). */
+/** True when Phase lists more than one legal AttackTarget for this attacker. */
+export function needsAttackTargetPick(
+  attackerId: string,
+  detail: WaitingCombatAttackers,
+): boolean {
+  return attackTargetsFor(attackerId, detail).length > 1
+}
+
+export function attackTargetsEqual(a: AttackTarget, b: AttackTarget): boolean {
+  if (a.type !== b.type) return false
+  return Object.is(a.data, b.data)
+}
+
+/**
+ * Human-readable AttackTarget label from Phase options only.
+ * Player → seat id; Planeswalker/Battle → object id (resolve name via ctx).
+ */
+export function formatAttackTargetLabel(
+  t: AttackTarget,
+  ctx: {
+    objectName?: (id: string) => string | undefined
+    seatLabel?: (seatId: number) => string
+  } = {},
+): string {
+  const seat = (id: number) => ctx.seatLabel?.(id) ?? (id === 0 ? 'You' : `Seat ${id}`)
+  const obj = (id: number | string) => {
+    const key = String(id)
+    return ctx.objectName?.(key) || `#${key}`
+  }
+  if (t.type === 'Player' && typeof t.data === 'number') return seat(t.data)
+  if (t.type === 'Planeswalker' && (typeof t.data === 'number' || typeof t.data === 'string')) {
+    return `PW ${obj(t.data)}`
+  }
+  if (t.type === 'Battle' && (typeof t.data === 'number' || typeof t.data === 'string')) {
+    return `Battle ${obj(t.data)}`
+  }
+  if (typeof t.data === 'number' || typeof t.data === 'string') {
+    return `${t.type} ${t.data}`
+  }
+  return t.type
+}
+
+/**
+ * Find a Phase-legal Player AttackTarget for a seat, if any.
+ */
+export function playerAttackTargetForSeat(
+  attackerId: string,
+  detail: WaitingCombatAttackers,
+  seatId: number,
+): AttackTarget | null {
+  return (
+    attackTargetsFor(attackerId, detail).find(
+      (t) => t.type === 'Player' && t.data === seatId,
+    ) ?? null
+  )
+}
+
+/**
+ * Find a Phase-legal Planeswalker/Battle AttackTarget for an object id.
+ */
+export function objectAttackTargetFor(
+  attackerId: string,
+  detail: WaitingCombatAttackers,
+  objectId: string,
+): AttackTarget | null {
+  const n = Number(objectId)
+  return (
+    attackTargetsFor(attackerId, detail).find((t) => {
+      if (t.type !== 'Planeswalker' && t.type !== 'Battle') return false
+      return t.data === n || String(t.data) === objectId
+    }) ?? null
+  )
+}
+
+/**
+ * Build DeclareAttackers from selected attackers + optional per-attacker overrides.
+ * Auto-picks only when Phase lists exactly one legal AttackTarget for that attacker.
+ * Returns null if any selected attacker has 0 targets, or >1 without an override.
+ */
 export function buildDeclareAttackersAction(
   selectedAttackerIds: string[],
   detail: WaitingCombatAttackers,
+  overrides: Record<string, AttackTarget> = {},
 ): PhaseGameAction | null {
   const attacks: Array<[number, AttackTarget]> = []
   for (const id of selectedAttackerIds) {
     const targets = attackTargetsFor(id, detail)
-    const target = targets[0]
+    let target = overrides[id]
+    if (target) {
+      // Must still be Phase-legal
+      if (!targets.some((t) => attackTargetsEqual(t, target!))) return null
+    } else if (targets.length === 1) {
+      target = targets[0]
+    } else {
+      return null
+    }
     if (!target) return null
     const n = Number(id)
     if (!Number.isFinite(n)) return null
@@ -1461,6 +1548,16 @@ export function buildDeclareAttackersAction(
     type: 'DeclareAttackers',
     data: { attacks, bands: [] },
   }
+}
+
+/** True when every selected attacker has a resolvable Phase AttackTarget. */
+export function attackersReady(
+  selectedAttackerIds: string[],
+  detail: WaitingCombatAttackers,
+  overrides: Record<string, AttackTarget> = {},
+): boolean {
+  if (selectedAttackerIds.length === 0) return true
+  return buildDeclareAttackersAction(selectedAttackerIds, detail, overrides) != null
 }
 
 export function buildDeclareNoneAttackers(): PhaseGameAction {

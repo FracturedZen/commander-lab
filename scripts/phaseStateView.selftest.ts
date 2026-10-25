@@ -132,6 +132,13 @@ import {
   ensureAutoPayment,
   applyPaymentPref,
   buildDeclareAttackersAction,
+  attackTargetsFor,
+  needsAttackTargetPick,
+  formatAttackTargetLabel,
+  attackersReady,
+  playerAttackTargetForSeat,
+  objectAttackTargetFor,
+  attackTargetsEqual,
   findMulliganActions,
   buildSelectCards,
   buildSelectModes,
@@ -1101,3 +1108,88 @@ console.log('phaseStateView.selftest: ok (incl. v0.7.0 gameLog/mana/concede)')
   assert(v4.activePlayer === 2, 'active seat2')
 }
 console.log('phaseStateView.selftest: ok (incl. v0.7.1 multi-seat)')
+
+// --- v0.7.2 multi-opponent AttackTarget ---
+{
+  const multi = parseWaitingFor({
+    type: 'DeclareAttackers',
+    data: {
+      player: 0,
+      valid_attacker_ids: [10, 11],
+      valid_attack_targets: [
+        { type: 'Player', data: 1 },
+        { type: 'Player', data: 2 },
+        { type: 'Planeswalker', data: 99 },
+      ],
+      valid_attack_targets_by_attacker: {
+        '10': [
+          { type: 'Player', data: 1 },
+          { type: 'Player', data: 2 },
+        ],
+        '11': [
+          { type: 'Player', data: 2 },
+          { type: 'Planeswalker', data: 99 },
+        ],
+      },
+    },
+  })
+  assert(multi?.kind === 'DeclareAttackers', 'parse multi atk')
+  if (multi?.kind === 'DeclareAttackers') {
+    assert(needsAttackTargetPick('10', multi), '10 needs pick')
+    assert(attackTargetsFor('10', multi).length === 2, '10 has 2 targets')
+    // No silent seat-1 default when multi
+    assert(buildDeclareAttackersAction(['10'], multi) == null, 'refuse without override')
+    assert(!attackersReady(['10'], multi, {}), 'not ready without override')
+    const pickSeat2 = playerAttackTargetForSeat('10', multi, 2)
+    assert(pickSeat2?.type === 'Player' && pickSeat2.data === 2, 'seat2 target')
+    const built = buildDeclareAttackersAction(['10'], multi, { '10': pickSeat2! })
+    assert(built?.type === 'DeclareAttackers', 'build with override')
+    const attacks = (built!.data as { attacks: Array<[number, { type: string; data: number }]> }).attacks
+    assert(attacks[0]![1].data === 2, 'attacks seat 2 not seat 1')
+    // Wrong override rejected
+    assert(
+      buildDeclareAttackersAction(['10'], multi, {
+        '10': { type: 'Player', data: 3 },
+      }) == null,
+      'illegal override rejected',
+    )
+    const pw = objectAttackTargetFor('11', multi, '99')
+    assert(pw?.type === 'Planeswalker', 'pw target')
+    const both = buildDeclareAttackersAction(['10', '11'], multi, {
+      '10': pickSeat2!,
+      '11': pw!,
+    })
+    assert(both != null && (both.data as { attacks: unknown[] }).attacks.length === 2, 'two attacks')
+    assert(
+      formatAttackTargetLabel({ type: 'Player', data: 2 }) === 'Seat 2',
+      'label seat',
+    )
+    assert(
+      formatAttackTargetLabel(
+        { type: 'Planeswalker', data: 99 },
+        { objectName: (id) => (id === '99' ? 'Karn Liberated' : undefined) },
+      ).includes('Karn'),
+      'label pw',
+    )
+    assert(
+      attackTargetsEqual({ type: 'Player', data: 1 }, { type: 'Player', data: 1 }),
+      'equal',
+    )
+    // Single-target still auto-picks
+    const single = parseWaitingFor({
+      type: 'DeclareAttackers',
+      data: {
+        player: 0,
+        valid_attacker_ids: [10],
+        valid_attack_targets: [{ type: 'Player', data: 1 }],
+      },
+    })
+    assert(single?.kind === 'DeclareAttackers', 'single parse')
+    if (single?.kind === 'DeclareAttackers') {
+      assert(!needsAttackTargetPick('10', single), 'single no pick')
+      const auto = buildDeclareAttackersAction(['10'], single)
+      assert(auto != null, 'single auto')
+    }
+  }
+}
+console.log('phaseStateView.selftest: ok (incl. v0.7.2 multi AttackTarget)')
