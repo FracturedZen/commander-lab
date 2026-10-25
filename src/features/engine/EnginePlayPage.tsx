@@ -21,32 +21,83 @@ import { installSampleDecks } from '@/lib/sample-decks/install'
 import type { Deck } from '@/types/deck'
 import { EngineBoard } from './EngineBoard'
 
+const STUB_DECK_ID = '__stub_basics__'
+const LS_HUMAN = 'cl.engine.humanDeckId'
+const LS_AI = 'cl.engine.aiDeckId'
+
+function deckLabel(d: Deck): string {
+  const cmd = d.commander?.name
+  const n = d.cards.reduce((s, c) => s + Math.max(1, c.quantity ?? 1), 0)
+  const total = n + (d.commander ? 1 : 0) + (d.partner ? 1 : 0)
+  if (cmd) return `${d.name} · ${cmd} (${total})`
+  return `${d.name} (${total})`
+}
+
+function readLs(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function writeLs(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* private mode */
+  }
+}
+
 export function EnginePlayPage() {
   const adapter = useMemo(() => getPhaseAdapter(), [])
   const [status, setStatus] = useState<EngineStatus>({ kind: 'idle' })
   const [progress, setProgress] = useState('')
   const [decks, setDecks] = useState<Deck[]>([])
-  const [humanDeckId, setHumanDeckId] = useState<string>('')
-  const [aiDeckId, setAiDeckId] = useState<string>('')
+  const [decksReady, setDecksReady] = useState(false)
+  const [humanDeckId, setHumanDeckId] = useState<string>(() => readLs(LS_HUMAN))
+  const [aiDeckId, setAiDeckId] = useState<string>(() => readLs(LS_AI))
   const [board, setBoard] = useState<PhaseBoardView | null>(null)
   const [log, setLog] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [goldfish, setGoldfish] = useState<GoldfishResult | null>(null)
   const [fallbackBanner, setFallbackBanner] = useState<string | null>(null)
   const [setupOpen, setSetupOpen] = useState(true)
+  const [startNote, setStartNote] = useState<string | null>(null)
 
   const refreshDecks = useCallback(async () => {
     await installSampleDecks()
     const list = await listDecks()
     setDecks(list)
-    if (!humanDeckId && list[0]) setHumanDeckId(list[0].id)
-    if (!aiDeckId && list[1]) setAiDeckId(list[1].id)
-    else if (!aiDeckId && list[0]) setAiDeckId(list[0].id)
-  }, [humanDeckId, aiDeckId])
+    setDecksReady(true)
+    setHumanDeckId((prev) => {
+      if (prev === STUB_DECK_ID) return prev
+      if (prev && list.some((d) => d.id === prev)) return prev
+      const next = list[0]?.id ?? STUB_DECK_ID
+      writeLs(LS_HUMAN, next)
+      return next
+    })
+    setAiDeckId((prev) => {
+      if (prev === STUB_DECK_ID) return prev
+      if (prev && list.some((d) => d.id === prev)) return prev
+      const next = list[1]?.id ?? list[0]?.id ?? STUB_DECK_ID
+      writeLs(LS_AI, next)
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     void refreshDecks()
   }, [refreshDecks])
+
+  const pickHuman = (id: string) => {
+    setHumanDeckId(id)
+    writeLs(LS_HUMAN, id)
+  }
+  const pickAi = (id: string) => {
+    setAiDeckId(id)
+    writeLs(LS_AI, id)
+  }
 
   const pushLog = (line: string) =>
     setLog((prev) => [`${new Date().toLocaleTimeString()} ${line}`, ...prev].slice(0, 80))
@@ -96,21 +147,38 @@ export function EnginePlayPage() {
       if (!adapter.isReady) return
     }
     setBusy(true)
+    setStartNote(null)
     try {
-      const human = decks.find((d) => d.id === humanDeckId)
-      const ai = decks.find((d) => d.id === aiDeckId)
+      const human =
+        humanDeckId === STUB_DECK_ID
+          ? null
+          : decks.find((d) => d.id === humanDeckId) ?? null
+      const ai =
+        aiDeckId === STUB_DECK_ID
+          ? null
+          : decks.find((d) => d.id === aiDeckId) ?? null
+
       let deckList
       if (human) {
-        deckList = toPhaseDeckList(human, ai ?? human)
+        const oppDeck = ai ?? human
+        deckList = toPhaseDeckList(human, oppDeck)
         deckList = {
           ...deckList,
           player: sanitizePhasePlayer(deckList.player, 'Mountain'),
           opponent: sanitizePhasePlayer(deckList.opponent, 'Island'),
           ai_decks: [sanitizePhasePlayer(deckList.opponent, 'Island')],
         }
+        const note = ai
+          ? `Saved decks: ${human.name} vs ${ai.name}`
+          : `Saved deck ${human.name} (AI mirrors you)`
+        setStartNote(note)
+        pushLog(note)
       } else {
         deckList = goldfishStubDecks()
+        setStartNote('Using built-in basics stubs (no saved deck selected)')
+        pushLog('Start: basics stubs (no IndexedDB deck for you)')
       }
+
       adapter.startGame(deckList, { seed: Date.now() % 1e9, playerCount: 2 })
       pushLog(
         `Game started: ${deckList.player.commander[0] ?? '?'} vs ${deckList.opponent.commander[0] ?? '?'}`,
@@ -193,26 +261,37 @@ export function EnginePlayPage() {
     }
   }
 
+  const deckOptions = (
+    <>
+      {decks.map((d) => (
+        <option key={d.id} value={d.id}>
+          {deckLabel(d)}
+        </option>
+      ))}
+      <option value={STUB_DECK_ID}>Basics stub (engine test only)</option>
+    </>
+  )
+
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-3 px-2 py-3 sm:px-4">
+    <div className="mx-auto flex max-w-5xl flex-col gap-3 px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-lg font-semibold text-white">Phase Engine</h1>
           <p className="text-xs text-slate-400">
-            Arena board ← Phase state. Cyan = legal · rose = targets/discard · orange = combat · amber = mana. Pay: Auto / Manual / Sac-safe.
+            Pick saved decks (IndexedDB) · cyan = legal · Pass dock stays on screen
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 gap-2">
           <button
             type="button"
-            className="rounded-md bg-slate-800 px-3 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+            className="rounded-md bg-slate-800 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
             onClick={() => setSetupOpen((v) => !v)}
           >
             {setupOpen ? 'Hide setup' : 'Setup'}
           </button>
           <Link
             to="/"
-            className="rounded-md bg-slate-800 px-3 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+            className="rounded-md bg-slate-800 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
           >
             Legacy table
           </Link>
@@ -225,6 +304,12 @@ export function EnginePlayPage() {
         </div>
       )}
 
+      {startNote && !setupOpen && (
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-100">
+          {startNote}
+        </div>
+      )}
+
       {setupOpen && (
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
@@ -233,22 +318,81 @@ export function EnginePlayPage() {
               {status.kind === 'loading' ? ` · ${status.detail}` : ''}
               {status.kind === 'error' ? ` · ${status.message}` : ''}
             </span>
-            {progress && <span className="text-slate-500">{progress}</span>}
+            {progress && <span className="truncate text-slate-500">{progress}</span>}
           </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-medium text-slate-200">
+              Decks from this device ({decksReady ? decks.length : '…'} saved)
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void refreshDecks()}
+                className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700 disabled:opacity-50"
+              >
+                Refresh
+              </button>
+              <Link
+                to="/decks"
+                className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-cyan-200 ring-1 ring-slate-700 hover:bg-slate-700"
+              >
+                Manage decks
+              </Link>
+              <Link
+                to="/builder"
+                className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-cyan-200 ring-1 ring-slate-700 hover:bg-slate-700"
+              >
+                Builder
+              </Link>
+            </div>
+          </div>
+
+          {decksReady && decks.length === 0 && (
+            <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-950/25 px-3 py-2 text-xs text-amber-100">
+              No saved decks yet. Import or build one, or start with the basics stub.
+              Samples install automatically when available.
+            </div>
+          )}
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="text-xs text-slate-400">
+              Your deck (seat 0)
+              <select
+                className="mt-1 min-h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-white"
+                value={humanDeckId || STUB_DECK_ID}
+                onChange={(e) => pickHuman(e.target.value)}
+              >
+                {deckOptions}
+              </select>
+            </label>
+            <label className="text-xs text-slate-400">
+              AI deck (seat 1)
+              <select
+                className="mt-1 min-h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-white"
+                value={aiDeckId || STUB_DECK_ID}
+                onChange={(e) => pickAi(e.target.value)}
+              >
+                {deckOptions}
+              </select>
+            </label>
+          </div>
+
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
               disabled={busy}
               onClick={() => void boot()}
-              className="rounded-md bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-600 disabled:opacity-50"
+              className="min-h-11 rounded-md bg-cyan-700 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50"
             >
               Boot Phase
             </button>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || !decksReady}
               onClick={() => void startGame()}
-              className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+              className="min-h-11 flex-1 rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50 sm:flex-none"
             >
               Start vs AI
             </button>
@@ -256,40 +400,10 @@ export function EnginePlayPage() {
               type="button"
               disabled={busy}
               onClick={() => void runGoldfish()}
-              className="rounded-md bg-violet-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 disabled:opacity-50"
+              className="min-h-11 rounded-md bg-violet-700 px-4 py-2 text-sm font-medium text-white hover:bg-violet-600 disabled:opacity-50"
             >
               Headless goldfish
             </button>
-          </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="text-xs text-slate-400">
-              Your deck
-              <select
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-white"
-                value={humanDeckId}
-                onChange={(e) => setHumanDeckId(e.target.value)}
-              >
-                {decks.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-xs text-slate-400">
-              AI deck
-              <select
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-white"
-                value={aiDeckId}
-                onChange={(e) => setAiDeckId(e.target.value)}
-              >
-                {decks.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </label>
           </div>
         </div>
       )}
@@ -307,8 +421,8 @@ export function EnginePlayPage() {
 
       {!board && (
         <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/40 p-6 text-center text-sm text-slate-500">
-          Boot Phase, then <strong className="text-slate-300">Start vs AI</strong> to load the
-          Arena board from engine state.
+          Choose decks above, then <strong className="text-slate-300">Start vs AI</strong>.
+          Phase boots automatically if needed.
         </div>
       )}
 
@@ -322,7 +436,7 @@ export function EnginePlayPage() {
 
       <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
         <p className="mb-2 text-xs font-medium text-slate-400">Log</p>
-        <ul className="max-h-36 space-y-0.5 overflow-auto font-mono text-[11px] text-slate-500">
+        <ul className="max-h-28 space-y-0.5 overflow-auto font-mono text-[11px] text-slate-500 sm:max-h-36">
           {log.map((l, i) => (
             <li key={i}>{l}</li>
           ))}

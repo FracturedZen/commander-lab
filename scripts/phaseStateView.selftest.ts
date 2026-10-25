@@ -4,6 +4,7 @@ import {
   normalizeLegalActions,
   unwrapPhaseState,
 } from '../src/engine/phaseStateView.ts'
+import { toPhaseDeckList, deckToPhasePlayer } from '../src/engine/deckMap'
 
 function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg)
@@ -901,3 +902,34 @@ assert(formatSpellCostLabel(viewCosts.spellCosts['3']) === '{4}{R}', 'cmd tax-is
 
 
 console.log('phaseStateView.selftest + engineInteraction: ok')
+
+// --- v0.6.9 deck map (IndexedDB → Phase) ---
+{
+  const fakeDeck = {
+    id: 'd1',
+    name: 'Test',
+    commander: { id: 'c', name: 'Krenko, Mob Boss', quantity: 1 },
+    cards: [
+      { id: 'a', name: 'Mountain', quantity: 50 },
+      { id: 'b', name: 'Goblin Motivator', quantity: 1 },
+    ],
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const fakeAi = {
+    ...fakeDeck,
+    id: 'd2',
+    name: 'AI',
+    commander: { id: 'c2', name: 'Aesi, Tyrant of Gyre Strait', quantity: 1 },
+    cards: [{ id: 'i', name: 'Island', quantity: 50 }],
+  }
+  const mapped = deckToPhasePlayer(fakeDeck as never)
+  assert(mapped.commander[0] === 'Krenko, Mob Boss', 'commander name')
+  assert(mapped.main_deck.filter((n) => n === 'Mountain').length === 50, 'qty expand')
+  assert(!mapped.main_deck.includes('Krenko, Mob Boss'), 'cmd not in main')
+  const list = toPhaseDeckList(fakeDeck as never, fakeAi as never)
+  assert(list.player.commander[0] === 'Krenko, Mob Boss', 'human seat')
+  assert(list.opponent.commander[0] === 'Aesi, Tyrant of Gyre Strait', 'ai seat')
+  assert(list.ai_decks?.[0]?.commander[0] === 'Aesi, Tyrant of Gyre Strait', 'ai_decks')
+}
+console.log('phaseStateView.selftest: ok (incl. v0.6.9 deckMap)')

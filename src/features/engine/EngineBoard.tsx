@@ -1452,7 +1452,7 @@ export function EngineBoard({
         </span>
         <button
           type="button"
-          className="ml-auto rounded bg-rose-800/80 px-2 py-1 text-xs hover:bg-rose-700"
+          className="ml-auto min-h-10 rounded bg-rose-800/80 px-3 py-2 text-xs hover:bg-rose-700"
           onClick={() => setMode({ kind: 'idle' })}
         >
           Cancel
@@ -1468,7 +1468,7 @@ export function EngineBoard({
           <button
             type="button"
             disabled={busy}
-            className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
+            className="min-h-10 rounded bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
             onClick={confirmAttackers}
           >
             {mode.selected.length === 0
@@ -1528,7 +1528,7 @@ export function EngineBoard({
         <button
           type="button"
           disabled={busy}
-          className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
+          className="min-h-10 rounded bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
           onClick={confirmBlockers}
         >
           {mode.assignments.length === 0
@@ -1571,7 +1571,7 @@ export function EngineBoard({
                 mode.controllerDamage,
               )
             }
-            className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
+            className="min-h-10 rounded bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
             onClick={confirmAssignCombatDamage}
           >
             Confirm damage
@@ -3049,30 +3049,20 @@ export function EngineBoard({
           <span className="font-semibold uppercase tracking-wide">
             {stackNonempty ? 'Respond' : 'Your priority'}
           </span>
-          <span className="text-white/70">
+          <span className="min-w-0 flex-1 text-white/70">
             {stackNonempty
               ? `Stack has ${view.stackCount} · glow = legal responses · Pass to let it resolve`
               : boardResponses || respondableCount > 0
                 ? 'Glow marks legal plays/activates · Pass to advance'
                 : 'Nothing else legal · Pass to continue'}
           </span>
-          {canPass && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => passAction && onSubmit(passAction)}
-              className="ml-auto rounded-full bg-sky-600 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-white disabled:opacity-40"
-            >
-              {stackNonempty ? 'Pass priority' : 'Pass'}
-            </button>
-          )}
         </div>
       )}
-      {paymentBar}
-      {modeBanner}
+      <div className="hidden sm:block">{paymentBar}</div>
+      <div className="hidden sm:block">{modeBanner}</div>
 
       <div
-        className="arena-board relative overflow-hidden rounded-3xl border-4 border-amber-950/80 shadow-2xl shadow-black/50"
+        className="arena-board relative overflow-hidden rounded-3xl border-4 border-amber-950/80 pb-16 shadow-2xl shadow-black/50 sm:pb-0"
         style={{
           backgroundColor: '#0d3b2e',
           backgroundImage:
@@ -3276,6 +3266,7 @@ export function EngineBoard({
           </div>
         )}
 
+        {/* Desktop Pass FAB — phone uses sticky dock below */}
         <button
           type="button"
           disabled={busy || !canPass}
@@ -3284,7 +3275,7 @@ export function EngineBoard({
             (mode.kind === 'idle' || mode.kind === 'manaPay') &&
             onSubmit(passAction)
           }
-          className="absolute bottom-3 right-3 z-20 rounded-full bg-gradient-to-b from-sky-400 to-sky-700 px-5 py-3 text-sm font-bold uppercase tracking-wide text-white shadow-xl shadow-sky-900/50 ring-2 ring-white/30 disabled:opacity-40"
+          className="absolute bottom-3 right-3 z-20 hidden rounded-full bg-gradient-to-b from-sky-400 to-sky-700 px-5 py-3 text-sm font-bold uppercase tracking-wide text-white shadow-xl shadow-sky-900/50 ring-2 ring-white/30 disabled:opacity-40 sm:inline-flex"
         >
           {mode.kind === 'manaPay'
             ? 'Confirm'
@@ -3292,6 +3283,38 @@ export function EngineBoard({
               ? 'Pass priority'
               : 'Pass'}
         </button>
+      </div>
+
+      {/* Sticky bottom chrome: wizards + Pass stay reachable on narrow screens */}
+      <div className="sticky bottom-0 z-30 -mx-2 border-t border-slate-700/80 bg-slate-950/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_rgba(0,0,0,0.45)] backdrop-blur-md sm:hidden">
+        <div className="mb-2">{paymentBar}</div>
+        {modeBanner ? (
+          <div className="mb-2 max-h-[36vh] overflow-y-auto overscroll-contain">
+            {modeBanner}
+          </div>
+        ) : null}
+        <div className="flex items-stretch gap-2">
+          <button
+            type="button"
+            disabled={busy || !canPass}
+            onClick={() =>
+              passAction &&
+              (mode.kind === 'idle' || mode.kind === 'manaPay') &&
+              onSubmit(passAction)
+            }
+            className="min-h-12 flex-1 rounded-xl bg-gradient-to-b from-sky-400 to-sky-700 px-4 text-sm font-bold uppercase tracking-wide text-white shadow-lg shadow-sky-900/40 ring-1 ring-white/25 disabled:opacity-40"
+          >
+            {stackNonempty && yourPriority ? 'Pass priority' : 'Pass'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onDriveAi}
+            className="min-h-12 rounded-xl bg-slate-800 px-3 text-xs font-medium text-slate-200 ring-1 ring-slate-600 hover:bg-slate-700 disabled:opacity-40"
+          >
+            AI
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
@@ -3340,7 +3363,7 @@ export function EngineBoard({
 
       {picker && (
         <div
-          className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 p-3 sm:items-center"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:items-center"
           onClick={() => setPicker(null)}
         >
           <div
@@ -3350,7 +3373,7 @@ export function EngineBoard({
             <p className="mb-2 text-sm font-semibold text-white">
               {picker.name} — choose action
             </p>
-            <div className="flex max-h-64 flex-col gap-1 overflow-auto">
+            <div className="flex max-h-[50vh] flex-col gap-1 overflow-auto sm:max-h-64">
               {picker.actions.map((a, i) => (
                 <button
                   key={i}
@@ -3381,7 +3404,7 @@ export function EngineBoard({
                     }
                     submitWithManaPreview(a)
                   }}
-                  className="rounded border border-slate-700 px-2 py-1.5 text-left text-xs text-cyan-100 hover:border-cyan-400"
+                  className="min-h-11 rounded border border-slate-700 px-2 py-2.5 text-left text-sm text-cyan-100 hover:border-cyan-400"
                 >
                   {summarizeAction(a)}
                 </button>
@@ -3389,7 +3412,7 @@ export function EngineBoard({
             </div>
             <button
               type="button"
-              className="mt-2 text-xs text-slate-400 underline"
+              className="mt-3 min-h-11 w-full rounded-lg bg-slate-800 text-sm text-slate-200 ring-1 ring-slate-600"
               onClick={() => setPicker(null)}
             >
               Cancel
