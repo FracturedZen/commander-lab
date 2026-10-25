@@ -1,0 +1,6 @@
+{
+  "source": "none — CDN fallback active",
+  "note": "Run scripts/build-phase-engine.sh to populate local WASM + card-data. Loader prefers public/phase when wasm + card-data files exist.",
+  "phaseRepo": "https://github.com/FracturedZen/phase",
+  "preferLocal": false
+}
