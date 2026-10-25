@@ -9,7 +9,7 @@ export function AppShell() {
         <Outlet />
       </main>
       <footer className="border-t border-slate-900 py-3 text-center text-[11px] text-slate-600">
-        Commander Lab · Offline-first after card sync · PWA-ready
+        Commander Lab · Play = Phase Engine · Legacy Table = sandbox · PWA-ready
       </footer>
     </div>
   )

@@ -4,6 +4,12 @@ export { PhaseAdapter, getPhaseAdapter } from './PhaseAdapter'
 export { loadPhaseWasm, getCachedPhaseWasm } from './loadPhaseWasm'
 export { loadPhaseCardDataText } from './cardDataCache'
 export {
+  BOOT_STAGE_LABELS,
+  formatBytes,
+  stageOverall,
+} from './bootProgress'
+export type { BootProgress, BootStage, BootProgressCb } from './bootProgress'
+export {
   deckToPhasePlayer,
   toPhaseDeckList,
   toPhaseMultiDeckList,

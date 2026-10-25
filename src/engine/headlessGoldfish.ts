@@ -84,7 +84,7 @@ export async function runHeadlessGoldfish(opts: {
   const adapter = opts.adapter ?? new PhaseAdapter()
   try {
     if (!adapter.isReady) {
-      await adapter.boot(push)
+      await adapter.boot((bp) => push(bp.message))
     }
     const decks = opts.decks ?? sampleDeckList(opts.difficulty ?? PHASE_AI_DIFFICULTY)
     const playerCount = Math.max(

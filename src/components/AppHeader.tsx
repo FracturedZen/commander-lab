@@ -8,6 +8,14 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
       : 'text-slate-300 hover:bg-slate-800 hover:text-white',
   ].join(' ')
 
+const playLinkClass = ({ isActive }: { isActive: boolean }) =>
+  [
+    'rounded-md px-2.5 py-1.5 text-xs font-semibold transition sm:px-3 sm:text-sm',
+    isActive
+      ? 'bg-cyan-500/25 text-cyan-100 ring-1 ring-cyan-400/50'
+      : 'bg-cyan-700/80 text-white hover:bg-cyan-600',
+  ].join(' ')
+
 export function AppHeader() {
   return (
     <header className="sticky top-0 z-40 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur">
@@ -21,13 +29,16 @@ export function AppHeader() {
               Commander Lab
             </p>
             <p className="hidden text-xs text-slate-400 sm:block">
-              Offline-first EDH tabletop
+              Phase Engine play · Legacy Table sandbox
             </p>
           </div>
         </div>
-        <nav className="flex max-w-[70%] flex-wrap items-center justify-end gap-0.5 sm:gap-1">
-          <NavLink to="/" end className={linkClass}>
-            Table
+        <nav className="flex max-w-[75%] flex-wrap items-center justify-end gap-0.5 sm:gap-1">
+          <NavLink to="/engine" className={playLinkClass} title="Phase rules engine — real play path">
+            Play
+          </NavLink>
+          <NavLink to="/" end className={linkClass} title="Legacy zone sandbox (not Phase rules)">
+            Legacy
           </NavLink>
           <NavLink to="/decks" className={linkClass}>
             Decks
@@ -40,9 +51,6 @@ export function AppHeader() {
           </NavLink>
           <NavLink to="/stats" className={linkClass}>
             Stats
-          </NavLink>
-          <NavLink to="/engine" className={linkClass}>
-            Engine
           </NavLink>
           <NavLink to="/settings" className={linkClass}>
             Settings

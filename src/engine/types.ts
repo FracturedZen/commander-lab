@@ -73,7 +73,7 @@ export type PhaseAiProposal = {
 }
 
 export type PhaseWasmModule = {
-  default: (opts?: { module_or_path?: string | URL | Request }) => Promise<unknown>
+  default: (opts?: { module_or_path?: string | URL | Request | Response | BufferSource }) => Promise<unknown>
   initSync?: (opts: unknown) => unknown
   ping?: () => unknown
   load_card_database: (text: string) => unknown

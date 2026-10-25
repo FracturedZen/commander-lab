@@ -16,6 +16,11 @@ import {
   manaCountsEntries,
   buildConcedeAction,
 } from '../src/engine/phaseGameLog.ts'
+import {
+  stageOverall,
+  formatBytes,
+  BOOT_STAGE_LABELS,
+} from '../src/engine/bootProgress.ts'
 
 function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg)
@@ -919,7 +924,14 @@ assert(viewCosts.spellCosts['3'] != null, 'view spellCosts')
 assert(formatSpellCostLabel(viewCosts.spellCosts['3']) === '{4}{R}', 'cmd tax-ish cost')
 
 
-console.log('phaseStateView.selftest + engineInteraction: ok')
+
+// --- bootProgress helpers ---
+assert(stageOverall('glue', 0) === 0, 'glue start')
+assert(stageOverall('ready', 1) === 1, 'ready end')
+assert(stageOverall('wasm', 0.5) > stageOverall('wasm', 0), 'wasm mid')
+assert(formatBytes(1536).includes('KB'), 'formatBytes KB')
+assert(BOOT_STAGE_LABELS.length >= 5, 'stage labels')
+console.log('phaseStateView.selftest + engineInteraction + bootProgress: ok')
 
 // --- v0.6.9 deck map (IndexedDB → Phase) ---
 {
@@ -1192,4 +1204,4 @@ console.log('phaseStateView.selftest: ok (incl. v0.7.1 multi-seat)')
     }
   }
 }
-console.log('phaseStateView.selftest: ok (incl. v0.7.2 multi AttackTarget)')
+console.log('phaseStateView.selftest: ok (incl. v0.7.3 bootProgress)')

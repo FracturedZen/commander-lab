@@ -213,13 +213,36 @@ export function TabletopPage() {
   return (
     <div className="relative mx-auto flex max-w-6xl flex-col gap-2 px-2 pb-28 pt-2 sm:px-4">
       {!gameActive && (
+        <div className="rounded-xl border border-cyan-500/35 bg-gradient-to-br from-cyan-950/70 to-slate-950 px-4 py-3 shadow-lg shadow-cyan-950/30">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-cyan-50">
+                Real play → Phase Engine
+              </p>
+              <p className="mt-1 text-xs text-cyan-100/75">
+                Stack, priority, combat, and SBAs are Phase rules. This page is the
+                Legacy Table sandbox (zone moves / turn rail only).
+              </p>
+            </div>
+            <Link
+              to="/engine"
+              className="shrink-0 rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-cyan-900/40 hover:bg-cyan-500"
+            >
+              Open Play (Engine)
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {!gameActive && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3">
           <p className="text-sm font-medium text-amber-100">
-            No game started yet
+            Legacy Table — no game started
           </p>
           <p className="mt-1 text-xs text-amber-200/70">
-            Start a game below to deal opening hands, put commanders in the
-            command zone, and track turns. Drawing happens on the draw step.
+            Start below to deal opening hands, put commanders in the command zone,
+            and track turns. Drawing happens on the draw step. For full rules, use
+            Play (Engine).
           </p>
         </div>
       )}
@@ -228,9 +251,9 @@ export function TabletopPage() {
         <div className="rounded-2xl border border-emerald-700/40 bg-gradient-to-br from-emerald-950/80 to-slate-950 p-4 shadow-lg">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h1 className="text-xl font-semibold text-white">Start game</h1>
+              <h1 className="text-xl font-semibold text-white">Legacy Table setup</h1>
               <p className="text-sm text-slate-400">
-                Pick seats + decks. Starter decks work without Scryfall sync.
+                Pick seats + decks. Starter decks work without Scryfall sync. Not Phase rules.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -336,7 +359,7 @@ export function TabletopPage() {
             }
             className="mt-4 w-full rounded-xl bg-emerald-600 py-3.5 text-base font-semibold text-white shadow-lg shadow-emerald-900/40 hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Start game — deal hands &amp; track turns
+            Start Legacy Table — deal hands &amp; track turns
           </button>
         </div>
       )}

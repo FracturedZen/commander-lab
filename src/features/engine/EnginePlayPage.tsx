@@ -9,6 +9,9 @@ import {
   linesFromActionPayload,
   mergeLogLines,
   buildConcedeAction,
+  BOOT_STAGE_LABELS,
+  type BootProgress,
+  type BootStage,
   type EngineStatus,
   type GoldfishResult,
   type PhaseGameAction,
@@ -72,9 +75,21 @@ function appendPhaseResults(
   })
 }
 
+
+const STAGE_ORDER: BootStage[] = ['glue', 'wasm', 'init', 'card-data', 'load-db', 'ready']
+
+function stageIndex(stage: BootStage): number {
+  const i = STAGE_ORDER.indexOf(stage)
+  return i < 0 ? -1 : i
+}
+
 export function EnginePlayPage() {
   const adapter = useMemo(() => getPhaseAdapter(), [])
-  const [status, setStatus] = useState<EngineStatus>({ kind: 'idle' })
+  const [status, setStatus] = useState<EngineStatus>(() => {
+    const a = getPhaseAdapter()
+    return a.status
+  })
+  const [bootProgress, setBootProgress] = useState<BootProgress | null>(null)
   const [progress, setProgress] = useState('')
   const [decks, setDecks] = useState<Deck[]>([])
   const [decksReady, setDecksReady] = useState(false)
@@ -111,6 +126,19 @@ export function EnginePlayPage() {
   const lastDeckList = useRef<PhaseDeckList | null>(null)
   const lastPlayerCount = useRef<number>(2)
   const logEndRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    setStatus(adapter.status)
+    if (adapter.isReady) {
+      setBootProgress({
+        stage: 'ready',
+        message: `Phase ready (card-data ${adapter.getCardHash() ?? 'cached'})`,
+        fraction: 1,
+        stageFraction: 1,
+        fromCache: true,
+      })
+    }
+  }, [adapter])
 
   const refreshDecks = useCallback(async () => {
     await installSampleDecks()
@@ -258,18 +286,42 @@ export function EnginePlayPage() {
   const boot = async () => {
     setBusy(true)
     setFallbackBanner(null)
+    setBootProgress({
+      stage: 'glue',
+      message: 'Starting Phase boot…',
+      fraction: 0,
+      stageFraction: 0,
+    })
     try {
-      await adapter.boot((m) => {
-        setProgress(m)
-        setStatus({ kind: 'loading', detail: m })
+      await adapter.boot((bp) => {
+        setBootProgress(bp)
+        setProgress(bp.message)
+        if (bp.stage === 'error') {
+          setStatus({ kind: 'error', message: bp.message })
+        } else if (bp.stage === 'ready') {
+          setStatus({ kind: 'ready' })
+        } else {
+          setStatus({ kind: 'loading', detail: bp.message })
+        }
       })
       setStatus(adapter.status)
+      setBootProgress((prev) =>
+        prev?.stage === 'ready'
+          ? prev
+          : {
+              stage: 'ready',
+              message: `Phase ready (card-data ${adapter.getCardHash()})`,
+              fraction: 1,
+              stageFraction: 1,
+            },
+      )
       pushLog(`Engine ready · card-data ${adapter.getCardHash()}`)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       setStatus({ kind: 'error', message })
+      setBootProgress({ stage: 'error', message, fraction: 0 })
       setFallbackBanner(
-        `Phase WASM failed to load — legacy table still available. (${message})`,
+        `Phase WASM failed to load — Legacy Table still available. (${message})`,
       )
       pushLog(`Boot failed: ${message}`)
     } finally {
@@ -475,9 +527,9 @@ export function EnginePlayPage() {
     <div className="mx-auto flex max-w-5xl flex-col gap-3 px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-white">Phase Engine</h1>
+          <h1 className="text-lg font-semibold text-white">Play · Phase Engine</h1>
           <p className="text-xs text-slate-400">
-            Multi-seat Commander · mana pool · Phase log · concede / rematch
+            Real MTG rules (stack, priority, combat, SBAs). Multi-seat Commander vs Phase AI.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
@@ -518,8 +570,24 @@ export function EnginePlayPage() {
       </div>
 
       {fallbackBanner && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-sm text-amber-100">
-          {fallbackBanner}
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-sm text-amber-100">
+          <span className="min-w-0 flex-1">{fallbackBanner}</span>
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void boot()}
+              className="rounded-md bg-rose-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-600 disabled:opacity-50"
+            >
+              Retry boot
+            </button>
+            <Link
+              to="/"
+              className="rounded-md bg-slate-800 px-3 py-1.5 text-xs text-slate-200 ring-1 ring-slate-600 hover:bg-slate-700"
+            >
+              Legacy Table
+            </Link>
+          </div>
         </div>
       )}
 
@@ -531,13 +599,99 @@ export function EnginePlayPage() {
 
       {setupOpen && (
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
-            <span className="rounded bg-slate-800 px-2 py-1 font-mono">
-              status: {status.kind}
-              {status.kind === 'loading' ? ` · ${status.detail}` : ''}
-              {status.kind === 'error' ? ` · ${status.message}` : ''}
-            </span>
-            {progress && <span className="truncate text-slate-500">{progress}</span>}
+          {/* Boot progress */}
+          <div className="rounded-lg border border-slate-700/80 bg-slate-950/50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-medium text-slate-200">
+                Phase boot
+                <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                  {status.kind}
+                  {status.kind === 'error' ? ' · failed' : ''}
+                </span>
+              </p>
+              <span className="text-[10px] text-slate-500">
+                WASM + card-data cached after first success (SW / IndexedDB)
+              </span>
+            </div>
+            <ol className="mt-2 grid gap-1 sm:grid-cols-3">
+              {BOOT_STAGE_LABELS.filter((s) => s.stage !== 'ready').map(({ stage, label }) => {
+                const cur = bootProgress?.stage ?? 'glue'
+                const curIdx = stageIndex(cur === 'error' ? 'glue' : cur)
+                const thisIdx = stageIndex(stage)
+                const done =
+                  status.kind === 'ready' ||
+                  (cur !== 'error' && thisIdx >= 0 && curIdx > thisIdx) ||
+                  (bootProgress?.stage === stage && (bootProgress.stageFraction ?? 0) >= 1)
+                const active =
+                  status.kind === 'loading' && bootProgress?.stage === stage
+                return (
+                  <li
+                    key={stage}
+                    className={[
+                      'flex items-center gap-1.5 rounded px-2 py-1 text-[11px]',
+                      done
+                        ? 'bg-emerald-950/40 text-emerald-200'
+                        : active
+                          ? 'bg-cyan-950/50 text-cyan-100 ring-1 ring-cyan-600/40'
+                          : status.kind === 'error' && bootProgress?.stage === 'error'
+                            ? 'text-slate-500'
+                            : 'text-slate-500',
+                    ].join(' ')}
+                  >
+                    <span
+                      className={[
+                        'inline-block h-1.5 w-1.5 shrink-0 rounded-full',
+                        done
+                          ? 'bg-emerald-400'
+                          : active
+                            ? 'animate-pulse bg-cyan-400'
+                            : 'bg-slate-600',
+                      ].join(' ')}
+                    />
+                    {label}
+                  </li>
+                )
+              })}
+            </ol>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
+              <div
+                className={
+                  status.kind === 'error'
+                    ? 'h-full rounded-full bg-rose-600 transition-all'
+                    : status.kind === 'ready'
+                      ? 'h-full rounded-full bg-emerald-500 transition-all'
+                      : 'h-full rounded-full bg-cyan-500 transition-all'
+                }
+                style={{
+                  width: `${Math.round(
+                    Math.max(
+                      0,
+                      Math.min(
+                        1,
+                        status.kind === 'ready'
+                          ? 1
+                          : status.kind === 'error'
+                            ? bootProgress?.fraction ?? 0
+                            : bootProgress?.fraction ?? 0,
+                      ),
+                    ) * 100,
+                  )}%`,
+                }}
+              />
+            </div>
+            <p className="mt-1.5 truncate text-[11px] text-slate-400">
+              {status.kind === 'error'
+                ? status.message
+                : bootProgress?.message ||
+                  (status.kind === 'ready'
+                    ? 'Phase ready — Start a table when decks are set'
+                    : 'Tap Boot Phase (or Start — boots automatically)')}
+              {progress &&
+              progress !== bootProgress?.message &&
+              status.kind !== 'loading'
+                ? ` · ${progress}`
+                : ''}
+            </p>
           </div>
 
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
@@ -625,11 +779,23 @@ export function EnginePlayPage() {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || status.kind === 'ready'}
               onClick={() => void boot()}
-              className="min-h-11 rounded-md bg-cyan-700 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50"
+              className={
+                status.kind === 'error'
+                  ? 'min-h-11 rounded-md bg-rose-700 px-4 py-2 text-sm font-medium text-white hover:bg-rose-600 disabled:opacity-50'
+                  : status.kind === 'ready'
+                    ? 'min-h-11 rounded-md bg-emerald-900 px-4 py-2 text-sm font-medium text-emerald-100 ring-1 ring-emerald-700/50 disabled:opacity-80'
+                    : 'min-h-11 rounded-md bg-cyan-700 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50'
+              }
             >
-              Boot Phase
+              {busy && status.kind === 'loading'
+                ? 'Booting…'
+                : status.kind === 'error'
+                  ? 'Retry boot'
+                  : status.kind === 'ready'
+                    ? 'Phase ready'
+                    : 'Boot Phase'}
             </button>
             <button
               type="button"

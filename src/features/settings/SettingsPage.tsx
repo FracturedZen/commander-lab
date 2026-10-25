@@ -87,15 +87,15 @@ export function SettingsPage() {
       </section>
 
       <section className="rounded-xl border border-cyan-500/20 bg-slate-900/60 p-4">
-        <h2 className="text-sm font-semibold text-slate-200">Phase Engine</h2>
+        <h2 className="text-sm font-semibold text-slate-200">Play · Phase Engine</h2>
         <p className="mt-2 text-xs text-slate-400">
-          Real MTG rules (stack, priority, combat, SBAs) via Phase WASM. Open{' '}
-          <Link className="text-cyan-300 underline" to="/engine">
-            Engine
-          </Link>{' '}
-          in the nav to boot the engine, play legal-only vs AI, or run a headless
-          goldfish. First boot downloads ~39&nbsp;MB WASM + ~96&nbsp;MB card data
-          (cached after). Legacy Table stays available if WASM fails.
+          Primary play path: real MTG rules (stack, priority, combat, SBAs) via Phase WASM.
+          Use nav <Link className="text-cyan-300 underline" to="/engine">Play</Link> to boot
+          with staged progress, play legal-only vs AI, or run a headless goldfish. First boot
+          downloads ~39&nbsp;MB WASM + ~96&nbsp;MB card data (cached via service worker /
+          IndexedDB; retry if it fails).{' '}
+          <Link className="text-slate-300 underline" to="/">Legacy Table</Link> remains a
+          lighter zone sandbox.
         </p>
         <p className="mt-2 text-[11px] text-slate-500">
           Docs: <code className="text-emerald-300">docs/PHASE_ENGINE.md</code>

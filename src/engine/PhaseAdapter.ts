@@ -1,6 +1,7 @@
 import { PHASE_AI_DIFFICULTY } from './config'
 import { loadPhaseCardDataText } from './cardDataCache'
 import { loadPhaseWasm } from './loadPhaseWasm'
+import { stageOverall, type BootProgressCb } from './bootProgress'
 import type {
   EngineStatus,
   PhaseAiProposal,
@@ -95,15 +96,26 @@ export class PhaseAdapter {
   status: EngineStatus = { kind: 'idle' }
   viewerId = 0
 
-  async boot(onProgress?: (msg: string) => void): Promise<void> {
+  async boot(onProgress?: BootProgressCb): Promise<void> {
     try {
       this.status = { kind: 'loading', detail: 'WASM' }
       this.wasm = await loadPhaseWasm(onProgress)
       this.status = { kind: 'loading', detail: 'card-data' }
       const { text, hash } = await loadPhaseCardDataText(onProgress)
-      onProgress?.('Loading card database into engine…')
+      onProgress?.({
+        stage: 'load-db',
+        message: 'Loading card database into engine…',
+        fraction: stageOverall('load-db', 0),
+        stageFraction: 0,
+      })
       this.wasm.load_card_database(text)
       this.cardHash = hash
+      onProgress?.({
+        stage: 'load-db',
+        message: 'Card database loaded',
+        fraction: stageOverall('load-db', 1),
+        stageFraction: 1,
+      })
 
       const registry = this.wasm.getFormatRegistry() as Array<{
         format: string
@@ -115,10 +127,20 @@ export class PhaseAdapter {
       }
       this.formatConfig = commander.default_config
       this.status = { kind: 'ready' }
-      onProgress?.(`Phase ready (card-data ${hash})`)
+      onProgress?.({
+        stage: 'ready',
+        message: `Phase ready (card-data ${hash})`,
+        fraction: 1,
+        stageFraction: 1,
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       this.status = { kind: 'error', message }
+      onProgress?.({
+        stage: 'error',
+        message,
+        fraction: 0,
+      })
       throw err
     }
   }
