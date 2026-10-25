@@ -124,6 +124,16 @@ import {
   buildSelectCards,
   buildSelectModes,
   buildActivateManaSource,
+  buildChooseX,
+  buildSubmitPhyrexianChoices,
+  buildChooseAssistPlayer,
+  buildCommitAssistPayment,
+  buildSpendPoolMana,
+  buildUnspendPoolMana,
+  defaultPhyrexianChoices,
+  phyrexianChoicesPayload,
+  chooseXInRange,
+  assistPaymentInRange,
   derivedEngineStops,
   discardReady,
   manaTapObjectIds,
@@ -267,5 +277,89 @@ const withShortcuts = buildPhaseBoardView(wrapped, {
   ],
 })
 assert(withShortcuts.manaPaymentShortcutActions.length === 1, 'shortcuts on view')
+
+// --- v0.6.4 Phyrexian / ChooseX / Assist / pool pin ---
+const waitPhy = parseWaitingFor({
+  type: 'PhyrexianPayment',
+  data: {
+    player: 0,
+    spell_object: 12,
+    shards: [
+      { shard_index: 0, color: 'Black', options: { type: 'ManaOrLife' } },
+      { shard_index: 1, color: 'Black', options: { type: 'LifeOnly' } },
+    ],
+  },
+})
+assert(waitPhy?.kind === 'PhyrexianPayment', 'parse PhyrexianPayment')
+if (waitPhy?.kind === 'PhyrexianPayment') {
+  assert(waitPhy.shards.length === 2, 'shards')
+  const picks = defaultPhyrexianChoices(waitPhy.shards)
+  assert(picks.get(1) === 'life', 'LifeOnly default')
+  picks.set(0, 'life')
+  const payload = phyrexianChoicesPayload(waitPhy.shards, picks)
+  assert(payload[0]?.type === 'PayLife' && payload[1]?.type === 'PayLife', 'phy choices')
+  assert(buildSubmitPhyrexianChoices(payload).type === 'SubmitPhyrexianChoices', 'submit phy')
+}
+
+const waitX = parseWaitingFor({
+  type: 'ChooseXValue',
+  data: { min: 0, max: 5, x_cost_previews: [[0, {}], [2, {}]] },
+})
+assert(waitX?.kind === 'ChooseXValue', 'parse ChooseXValue')
+if (waitX?.kind === 'ChooseXValue') {
+  assert(waitX.min === 0 && waitX.max === 5, 'x range')
+  assert(chooseXInRange(waitX, 3), 'x in range')
+  assert(!chooseXInRange(waitX, 9), 'x out of range')
+  assert(buildChooseX(3).type === 'ChooseX', 'ChooseX action')
+}
+
+const waitAssistP = parseWaitingFor({
+  type: 'AssistChoosePlayer',
+  data: { candidates: [1], max_generic: 2 },
+})
+assert(waitAssistP?.kind === 'AssistChoosePlayer', 'parse AssistChoosePlayer')
+if (waitAssistP?.kind === 'AssistChoosePlayer') {
+  assert(waitAssistP.candidates[0] === 1, 'assist candidates')
+  assert(buildChooseAssistPlayer(null).type === 'ChooseAssistPlayer', 'decline assist')
+}
+
+const waitAssistPay = parseWaitingFor({
+  type: 'AssistPayment',
+  data: { max_generic: 3, caster: 0, chosen: 1 },
+})
+assert(waitAssistPay?.kind === 'AssistPayment', 'parse AssistPayment')
+if (waitAssistPay?.kind === 'AssistPayment') {
+  assert(assistPaymentInRange(waitAssistPay, 2), 'assist pay ok')
+  assert(!assistPaymentInRange(waitAssistPay, 9), 'assist pay bad')
+  assert(buildCommitAssistPayment(2).type === 'CommitAssistPayment', 'commit assist')
+}
+
+assert(buildSpendPoolMana(7).type === 'SpendPoolMana', 'SpendPoolMana')
+assert(buildUnspendPoolMana(7).type === 'UnspendPoolMana', 'UnspendPoolMana')
+
+const withPool = {
+  state: {
+    ...wrapped.state,
+    players: [
+      {
+        ...wrapped.state.players[0],
+        mana_pool: {
+          mana: [
+            { pip_id: 101, color: 'Red', source_id: 5, restrictions: [] },
+            { pip_id: 102, color: 'Red', source_id: 5, restrictions: ['ConvokePayment'] },
+          ],
+        },
+      },
+      wrapped.state.players[1],
+    ],
+    pending_cast: { pinned_pool_units: [101] },
+  },
+}
+const viewPool = buildPhaseBoardView(withPool, { actions: [] })
+assert(viewPool.seats[0]!.manaPool.length === 2, 'mana pool pips')
+assert(viewPool.pinnedPoolUnits.includes(101), 'pinned units')
+
+const stopsPhy = derivedEngineStops(waitPhy, 'main1')
+assert(stopsPhy.has('main1'), 'rail stop phyrexian')
 
 console.log('phaseStateView.selftest + engineInteraction: ok')

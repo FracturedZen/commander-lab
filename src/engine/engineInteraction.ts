@@ -78,6 +78,47 @@ export type WaitingEffectZone = {
   zone?: string
 }
 
+export type PhyrexianShardOptions =
+  | { type: 'ManaOrLife' }
+  | { type: 'LifeOnly' }
+  | { type: 'ManaOnly' }
+  | { type: string; [k: string]: unknown }
+
+export type PhyrexianShard = {
+  shardIndex: number
+  color: string
+  options: PhyrexianShardOptions
+}
+
+export type WaitingPhyrexian = {
+  kind: 'PhyrexianPayment'
+  player: number
+  shards: PhyrexianShard[]
+  spellObject?: number
+}
+
+export type WaitingChooseX = {
+  kind: 'ChooseXValue'
+  player?: number
+  min: number
+  max: number
+  /** Exact Phase [x, cost] preview rows when present. */
+  xCostPreviews: Array<[number, unknown]>
+}
+
+export type WaitingAssistChoosePlayer = {
+  kind: 'AssistChoosePlayer'
+  candidates: number[]
+  maxGeneric: number
+}
+
+export type WaitingAssistPayment = {
+  kind: 'AssistPayment'
+  maxGeneric: number
+  caster?: number
+  chosen?: number
+}
+
 export type WaitingOther = {
   kind: 'Other'
   type: string
@@ -90,6 +131,10 @@ export type WaitingDetail =
   | WaitingMulligan
   | WaitingManaPayment
   | WaitingManaSourceSelection
+  | WaitingPhyrexian
+  | WaitingChooseX
+  | WaitingAssistChoosePlayer
+  | WaitingAssistPayment
   | WaitingDiscard
   | WaitingModeChoice
   | WaitingEffectZone
@@ -190,17 +235,107 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
     }
   }
 
-  if (
-    type === 'ManaPayment' ||
-    type === 'ManaAbilityManaPayment' ||
-    type === 'PhyrexianPayment'
-  ) {
-    // Phyrexian still uses pool/choice panel elsewhere; treat as mana-pay window
-    // so board glow + Pass/Cancel work. Per-shard Phyrexian UI remains stub → action list.
+  if (type === 'ManaPayment' || type === 'ManaAbilityManaPayment') {
     return {
       kind: 'ManaPayment',
       player: typeof data.player === 'number' ? data.player : player,
       convokeMode: data.convoke_mode ?? data.convokeMode,
+    }
+  }
+
+  if (type === 'PhyrexianPayment') {
+    const rawShards = Array.isArray(data.shards) ? data.shards : []
+    const shards: PhyrexianShard[] = []
+    for (const s of rawShards) {
+      const sr = asRecord(s)
+      if (!sr) continue
+      const shardIndex =
+        typeof sr.shard_index === 'number'
+          ? sr.shard_index
+          : typeof sr.shardIndex === 'number'
+            ? sr.shardIndex
+            : shards.length
+      const color = typeof sr.color === 'string' ? sr.color : 'Colorless'
+      const optRaw = asRecord(sr.options) ?? { type: 'ManaOrLife' }
+      const optType = typeof optRaw.type === 'string' ? optRaw.type : 'ManaOrLife'
+      shards.push({
+        shardIndex,
+        color,
+        options: { ...optRaw, type: optType },
+      })
+    }
+    const spellObject =
+      typeof data.spell_object === 'number'
+        ? data.spell_object
+        : typeof data.spellObject === 'number'
+          ? data.spellObject
+          : undefined
+    return {
+      kind: 'PhyrexianPayment',
+      player: typeof data.player === 'number' ? data.player : player,
+      shards,
+      spellObject,
+    }
+  }
+
+  if (type === 'ChooseXValue') {
+    const min =
+      typeof data.min === 'number'
+        ? data.min
+        : typeof data.min_x_value === 'number'
+          ? data.min_x_value
+          : 0
+    const max =
+      typeof data.max === 'number'
+        ? data.max
+        : typeof data.max_x_value === 'number'
+          ? data.max_x_value
+          : min
+    const previewsRaw = data.x_cost_previews ?? data.xCostPreviews
+    const xCostPreviews: Array<[number, unknown]> = []
+    if (Array.isArray(previewsRaw)) {
+      for (const row of previewsRaw) {
+        if (Array.isArray(row) && typeof row[0] === 'number') {
+          xCostPreviews.push([row[0], row[1]])
+        }
+      }
+    }
+    return {
+      kind: 'ChooseXValue',
+      player: typeof data.player === 'number' ? data.player : undefined,
+      min,
+      max,
+      xCostPreviews,
+    }
+  }
+
+  if (type === 'AssistChoosePlayer') {
+    const candidates = Array.isArray(data.candidates)
+      ? data.candidates
+          .map((n) => (typeof n === 'number' ? n : Number(n)))
+          .filter((n) => Number.isFinite(n))
+      : []
+    const maxGeneric =
+      typeof data.max_generic === 'number'
+        ? data.max_generic
+        : typeof data.maxGeneric === 'number'
+          ? data.maxGeneric
+          : 0
+    return { kind: 'AssistChoosePlayer', candidates, maxGeneric }
+  }
+
+  if (type === 'AssistPayment') {
+    const maxGeneric =
+      typeof data.max_generic === 'number'
+        ? data.max_generic
+        : typeof data.maxGeneric === 'number'
+          ? data.maxGeneric
+          : 0
+    return {
+      kind: 'AssistPayment',
+      maxGeneric,
+      caster: typeof data.caster === 'number' ? data.caster : undefined,
+      chosen: typeof data.chosen === 'number' ? data.chosen : undefined,
     }
   }
 
@@ -531,6 +666,70 @@ export function buildSelectModes(indices: number[]): PhaseGameAction {
   return { type: 'SelectModes', data: { indices } }
 }
 
+export function buildChooseX(value: number): PhaseGameAction {
+  return { type: 'ChooseX', data: { value } }
+}
+
+export function buildSubmitPhyrexianChoices(
+  choices: Array<{ type: 'PayLife' } | { type: 'PayMana' }>,
+): PhaseGameAction {
+  return { type: 'SubmitPhyrexianChoices', data: { choices } }
+}
+
+export function buildChooseAssistPlayer(player: number | null): PhaseGameAction {
+  return { type: 'ChooseAssistPlayer', data: { player } }
+}
+
+export function buildCommitAssistPayment(generic: number): PhaseGameAction {
+  return { type: 'CommitAssistPayment', data: { generic } }
+}
+
+export function buildSpendPoolMana(pipId: number): PhaseGameAction {
+  return { type: 'SpendPoolMana', data: { pip_id: pipId } }
+}
+
+export function buildUnspendPoolMana(pipId: number): PhaseGameAction {
+  return { type: 'UnspendPoolMana', data: { pip_id: pipId } }
+}
+
+/** Default per-shard choice map from Phase shard options (ManaOnly / LifeOnly / ManaOrLife). */
+export function defaultPhyrexianChoices(
+  shards: PhyrexianShard[],
+): Map<number, 'mana' | 'life'> {
+  const m = new Map<number, 'mana' | 'life'>()
+  for (const s of shards) {
+    m.set(s.shardIndex, s.options.type === 'LifeOnly' ? 'life' : 'mana')
+  }
+  return m
+}
+
+export function phyrexianChoicesPayload(
+  shards: PhyrexianShard[],
+  picks: Map<number, 'mana' | 'life'>,
+): Array<{ type: 'PayLife' } | { type: 'PayMana' }> {
+  return shards.map((s) =>
+    (picks.get(s.shardIndex) ?? 'mana') === 'life'
+      ? { type: 'PayLife' as const }
+      : { type: 'PayMana' as const },
+  )
+}
+
+export function chooseXInRange(detail: WaitingChooseX, value: number): boolean {
+  return (
+    Number.isFinite(value) &&
+    value >= detail.min &&
+    value <= detail.max &&
+    detail.min <= detail.max
+  )
+}
+
+export function assistPaymentInRange(
+  detail: WaitingAssistPayment,
+  value: number,
+): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= detail.maxGeneric
+}
+
 export function findFlatAction(
   actions: PhaseGameAction[],
   type: string,
@@ -556,6 +755,10 @@ export function derivedEngineStops(
       break
     case 'ManaPayment':
     case 'ManaSourceSelection':
+    case 'PhyrexianPayment':
+    case 'ChooseXValue':
+    case 'AssistChoosePlayer':
+    case 'AssistPayment':
     case 'Discard':
     case 'ModeChoice':
     case 'EffectZoneChoice':

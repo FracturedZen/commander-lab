@@ -27,6 +27,14 @@ export type PhaseObjectView = CardInstance & {
   visible?: boolean
 }
 
+/** One mana pip from Phase player.mana_pool.mana (display + SpendPoolMana). */
+export type PhaseManaPip = {
+  pipId: number
+  color: string
+  sourceId?: number
+  restrictions: string[]
+}
+
 export type PhaseSeatView = {
   id: number
   life: number
@@ -38,6 +46,8 @@ export type PhaseSeatView = {
   graveyard: PhaseObjectView[]
   exile: PhaseObjectView[]
   command: PhaseObjectView[]
+  /** Exact Phase mana_pool.mana rows for this seat (empty if absent). */
+  manaPool: PhaseManaPip[]
   isEliminated?: boolean
 }
 
@@ -61,6 +71,8 @@ export type PhaseBoardView = {
   autoPass: boolean
   /** Exact Phase mana-payment shortcut taps (TapLandForMana with one option). */
   manaPaymentShortcutActions: PhaseGameAction[]
+  /** pending_cast.pinned_pool_units — pip ids already spent toward the cost. */
+  pinnedPoolUnits: number[]
 }
 
 type RawObj = {
@@ -316,6 +328,41 @@ export function normalizeLegalActions(raw: PhaseLegalActions | unknown): {
   return { actions, actionsByObject, autoPass, manaPaymentShortcutActions }
 }
 
+
+function parseManaPool(p: RawPlayer): PhaseManaPip[] {
+  const pool = (p as { mana_pool?: { mana?: unknown[] } }).mana_pool
+  const mana = pool?.mana
+  if (!Array.isArray(mana)) return []
+  const out: PhaseManaPip[] = []
+  for (const row of mana) {
+    if (!row || typeof row !== 'object') continue
+    const r = row as Record<string, unknown>
+    const pipId = typeof r.pip_id === 'number' ? r.pip_id : typeof r.pipId === 'number' ? r.pipId : null
+    if (pipId == null) continue
+    const color = typeof r.color === 'string' ? r.color : 'Colorless'
+    const restrictions = Array.isArray(r.restrictions)
+      ? r.restrictions.map(String)
+      : []
+    const sourceId =
+      typeof r.source_id === 'number'
+        ? r.source_id
+        : typeof r.sourceId === 'number'
+          ? r.sourceId
+          : undefined
+    out.push({ pipId, color, sourceId, restrictions })
+  }
+  return out
+}
+
+function parsePinnedPoolUnits(state: RawState): number[] {
+  const pc = state.pending_cast as { pinned_pool_units?: unknown } | undefined
+  const raw = pc?.pinned_pool_units
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((n) => (typeof n === 'number' ? n : Number(n)))
+    .filter((n) => Number.isFinite(n))
+}
+
 export function buildPhaseBoardView(
   stateRaw: unknown,
   legalRaw: PhaseLegalActions | unknown,
@@ -339,6 +386,7 @@ export function buildPhaseBoardView(
       flatActions: actions,
       autoPass,
       manaPaymentShortcutActions,
+      pinnedPoolUnits: [],
     }
   }
 
@@ -381,6 +429,7 @@ export function buildPhaseBoardView(
       graveyard: gy,
       exile,
       command,
+      manaPool: parseManaPool(p),
       isEliminated: p.is_eliminated || state.eliminated_players?.includes(id),
     }
   })
@@ -401,6 +450,7 @@ export function buildPhaseBoardView(
     flatActions: actions,
     autoPass,
     manaPaymentShortcutActions,
+    pinnedPoolUnits: parsePinnedPoolUnits(state),
   }
 }
 

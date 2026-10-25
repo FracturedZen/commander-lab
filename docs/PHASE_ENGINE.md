@@ -99,12 +99,12 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `phase-worker.js` | optional Web Worker protocol (public/) |
 | `../features/engine/EngineBoard.tsx` | Arena board (targeting, combat, mana pay, discard/mode, mulligan, glow → submit) |
 
-## How to play (v0.6.3+)
+## How to play (v0.6.4+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** (first time: ~39 MB WASM + ~96 MB card-data).
 3. Pick two decks (samples install automatically) → **Start vs AI**.
-4. Arena-style board reflects Phase zones (hand fan, BF art chips, lands, command, life). **Cyan** = legal; **rose** = targets / discard / zone choice; **orange** = combat; **amber** = mana pay / preview. **Pay:** Auto | Manual | Sac-safe stamps `payment_mode` on casts (Phase APIs only). Manual / Sac-safe → `WaitingFor::ManaPayment` / `ManaSourceSelection` with board glow + Confirm / CancelCast / option list. Discard / mode / EffectZoneChoice use glow+confirm (`SelectCards` / `SelectModes`). Multi-target attack: pick AttackTarget when Phase lists more than one. Mulligan banner. Opponent hand stubs. **Pass** / Confirm FAB. Rail **stops** highlight segments for real `waiting_for` choice points (display-only). **Show all actions** fallback.
+4. Arena-style board reflects Phase zones (hand fan, BF art chips, lands, command, life). **Cyan** = legal; **rose** = targets / discard / zone / Phyrexian; **orange** = combat; **amber** = mana pay / pool pin; **fuchsia** = Choose X; **teal** = Assist. **Pay:** Auto | Manual | Sac-safe stamps `payment_mode` on casts (Phase APIs only). Manual / Sac-safe → `ManaPayment` / `ManaSourceSelection` with board glow + Confirm / CancelCast. **SpendPoolMana / UnspendPoolMana** pin UI from `mana_pool` + `pinned_pool_units`. **PhyrexianPayment** per-shard Mana/Life toggles → `SubmitPhyrexianChoices`. **ChooseXValue** → `ChooseX`. **AssistChoosePlayer** / **AssistPayment** → `ChooseAssistPlayer` / `CommitAssistPayment`. Discard / mode / EffectZoneChoice glow+confirm. Multi-target attack picker. Mulligan banner. **Pass** / Confirm FAB. Rail **stops** from real `waiting_for` (display-only). **Show all actions** fallback.
 5. No free DnD on this page — only engine-legal submits.
 6. **Headless goldfish** runs stub basics decks with Phase Medium AI until turn/step limit.
 
@@ -115,8 +115,8 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) before 
 ## Limits & next work
 
 - Targeting wizard matches Phase legal CastSpell target combinations (prefix filter); does not invent targets.
-- Combat: 2p attacks with optional AttackTarget picker; blocker pairs from `waiting_for`. **Banding** still submits empty `bands` (no UI).
-- Phyrexian per-shard panel, SpendPoolMana pin UI, ChooseXValue, Assist, and many other WaitingFor kinds still fall through to the action list.
+- Combat: 2p attacks with optional AttackTarget picker; blocker pairs from `waiting_for`. **Banding** still submits empty `bands` — Phase `DeclareAttackers` waiting_for does not expose a non-empty band-candidate list for UI (only the action field `bands`); leave stubbed until Phase surfaces band options.
+- Many rarer WaitingFor kinds (Search, Scry, OrderTriggers, ReplacementChoice, PayAmountChoice, etc.) still fall through to the action list.
 - Phase rail stops are display-only (derived from WaitingFor); they do not gate Pass or invent phase authority.
 - Lazy-load / compress card-data further; optional Worker boot path.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.

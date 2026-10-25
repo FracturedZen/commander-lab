@@ -15,13 +15,22 @@ import {
 } from '@/engine/phaseStateView'
 import {
   applyPaymentPref,
+  assistPaymentInRange,
   buildActivateManaSource,
+  buildChooseAssistPlayer,
+  buildChooseX,
+  buildCommitAssistPayment,
   buildDeclareAttackersAction,
   buildDeclareBlockersAction,
   buildDeclareNoneAttackers,
   buildDeclareNoneBlockers,
   buildSelectCards,
   buildSelectModes,
+  buildSpendPoolMana,
+  buildSubmitPhyrexianChoices,
+  buildUnspendPoolMana,
+  chooseXInRange,
+  defaultPhyrexianChoices,
   derivedEngineStops,
   discardReady,
   effectZoneReady,
@@ -33,10 +42,14 @@ import {
   needsTargetingWizard,
   nextSlotTargets,
   parseWaitingFor,
+  phyrexianChoicesPayload,
   pickManaTapAction,
   pickUntargetedCast,
   summarizeManaSourceOption,
   type CastPaymentModeType,
+  type WaitingAssistChoosePlayer,
+  type WaitingAssistPayment,
+  type WaitingChooseX,
   type WaitingCombatAttackers,
   type WaitingCombatBlockers,
   type WaitingDetail,
@@ -45,6 +58,7 @@ import {
   type WaitingManaPayment,
   type WaitingManaSourceSelection,
   type WaitingModeChoice,
+  type WaitingPhyrexian,
 } from '@/engine/engineInteraction'
 
 type Props = {
@@ -83,6 +97,15 @@ type UiMode =
     }
   | { kind: 'manaPay'; detail: WaitingManaPayment }
   | { kind: 'manaSource'; detail: WaitingManaSourceSelection }
+  | {
+      kind: 'phyrexian'
+      detail: WaitingPhyrexian
+      /** shardIndex → mana | life — Phase PayMana / PayLife */
+      picks: Map<number, 'mana' | 'life'>
+    }
+  | { kind: 'chooseX'; detail: WaitingChooseX; value: number }
+  | { kind: 'assistPlayer'; detail: WaitingAssistChoosePlayer }
+  | { kind: 'assistPay'; detail: WaitingAssistPayment; value: number }
   | { kind: 'discard'; detail: WaitingDiscard; selected: string[] }
   | { kind: 'modeChoice'; detail: WaitingModeChoice; selected: number[] }
   | { kind: 'effectZone'; detail: WaitingEffectZone; selected: string[] }
@@ -171,6 +194,11 @@ export function EngineBoard({
     [waitingDetail, view.phase],
   )
 
+  const pinnedPool = useMemo(
+    () => new Set(view.pinnedPoolUnits ?? []),
+    [view.pinnedPoolUnits],
+  )
+
   // Auto-enter engine-driven choice modes from waiting_for (viewer seat 0).
   useEffect(() => {
     const w = waitingDetail
@@ -220,12 +248,43 @@ export function EngineBoard({
       setPicker(null)
       return
     }
+    if (w?.kind === 'PhyrexianPayment' && w.player === 0) {
+      setMode({
+        kind: 'phyrexian',
+        detail: w,
+        picks: defaultPhyrexianChoices(w.shards),
+      })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'ChooseXValue') {
+      // Phase does not always stamp player; treat as viewer decision when present.
+      const start =
+        w.min <= w.max ? Math.max(w.min, 0) : w.min
+      setMode({ kind: 'chooseX', detail: w, value: start })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'AssistChoosePlayer') {
+      setMode({ kind: 'assistPlayer', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'AssistPayment') {
+      setMode({ kind: 'assistPay', detail: w, value: 0 })
+      setPicker(null)
+      return
+    }
     setMode((m) => {
       if (
         m.kind === 'attackers' ||
         m.kind === 'blockers' ||
         m.kind === 'manaPay' ||
         m.kind === 'manaSource' ||
+        m.kind === 'phyrexian' ||
+        m.kind === 'chooseX' ||
+        m.kind === 'assistPlayer' ||
+        m.kind === 'assistPay' ||
         m.kind === 'discard' ||
         m.kind === 'modeChoice' ||
         m.kind === 'effectZone'
@@ -265,7 +324,13 @@ export function EngineBoard({
   const choiceGlow = useMemo(() => {
     if (mode.kind === 'discard') return new Set(mode.detail.cards)
     if (mode.kind === 'effectZone') return new Set(mode.detail.cards)
-    if (mode.kind === 'manaPay' || mode.kind === 'manaSource') return manaTapGlow
+    if (
+      mode.kind === 'manaPay' ||
+      mode.kind === 'manaSource' ||
+      mode.kind === 'phyrexian'
+    ) {
+      return manaTapGlow
+    }
     return new Set<string>()
   }, [mode, manaTapGlow])
 
@@ -328,7 +393,11 @@ export function EngineBoard({
       }
       return { highlighted: false, glow: 'legal', selected: false }
     }
-    if (mode.kind === 'manaPay' || mode.kind === 'manaSource') {
+    if (
+      mode.kind === 'manaPay' ||
+      mode.kind === 'manaSource' ||
+      mode.kind === 'phyrexian'
+    ) {
       if (choiceGlow.has(objectId)) {
         return { highlighted: true, glow: 'mana', selected: false }
       }
@@ -439,7 +508,7 @@ export function EngineBoard({
       return
     }
 
-    if (mode.kind === 'manaPay') {
+    if (mode.kind === 'manaPay' || mode.kind === 'phyrexian') {
       const acts = view.actionsByObject[card.objectId] ?? []
       const pick = pickManaTapAction(acts)
       if (pick === 'ambiguous') {
@@ -632,6 +701,51 @@ export function EngineBoard({
     )
   }
 
+  function poolPinRow() {
+    const pool = you.manaPool ?? []
+    if (pool.length === 0) return null
+    const usable = pool.filter((p) => !p.restrictions.includes('ConvokePayment'))
+    if (usable.length === 0) return null
+    return (
+      <div className="flex w-full flex-wrap items-center gap-1.5">
+        <span className="text-[10px] uppercase tracking-wide text-amber-200/70">
+          Pool pin
+        </span>
+        {usable.map((pip) => {
+          const isPinned = pinnedPool.has(pip.pipId)
+          return (
+            <button
+              key={pip.pipId}
+              type="button"
+              disabled={busy}
+              title={
+                isPinned
+                  ? `Unspend ${pip.color} #${pip.pipId}`
+                  : `Spend ${pip.color} #${pip.pipId}`
+              }
+              className={[
+                'rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums disabled:opacity-40',
+                isPinned
+                  ? 'bg-emerald-600 text-white ring-1 ring-emerald-300'
+                  : 'bg-slate-800 text-amber-100 ring-1 ring-amber-700/50 hover:bg-slate-700',
+              ].join(' ')}
+              onClick={() =>
+                onSubmit(
+                  isPinned
+                    ? buildUnspendPoolMana(pip.pipId)
+                    : buildSpendPoolMana(pip.pipId),
+                )
+              }
+            >
+              {(pip.color[0] ?? '?').toUpperCase()}
+              {isPinned ? '✓' : ''}
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
+
   const paymentBar = (
     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-300">
       <span className="text-slate-500">Pay:</span>
@@ -640,7 +754,7 @@ export function EngineBoard({
           <button
             key={m}
             type="button"
-            disabled={busy || mode.kind === 'manaPay'}
+            disabled={busy || mode.kind === 'manaPay' || mode.kind === 'phyrexian'}
             onClick={() => setPaymentPref(m)}
             className={[
               'rounded px-2 py-0.5 font-medium',
@@ -769,42 +883,45 @@ export function EngineBoard({
         )}
       </div>
     ) : mode.kind === 'manaPay' ? (
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-950/50 px-3 py-2 text-sm text-amber-50">
-        <span>
-          Pay mana · tap glowing sources
-          {manaTapGlow.size ? ` (${manaTapGlow.size})` : ''}
-        </span>
-        {(view.manaPaymentShortcutActions?.length ?? 0) > 0 && (
-          <button
-            type="button"
-            disabled={busy}
-            className="rounded bg-amber-700 px-2 py-1 text-xs font-semibold disabled:opacity-40"
-            onClick={runManaShortcuts}
-            title="Tap each land that has exactly one TapLandForMana option"
-          >
-            Tap simple ({view.manaPaymentShortcutActions!.length})
-          </button>
-        )}
-        {passAction && (
-          <button
-            type="button"
-            disabled={busy}
-            className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
-            onClick={() => onSubmit(passAction)}
-          >
-            Confirm pay
-          </button>
-        )}
-        {cancelCast && (
-          <button
-            type="button"
-            disabled={busy}
-            className="rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
-            onClick={() => onSubmit(cancelCast)}
-          >
-            Cancel cast
-          </button>
-        )}
+      <div className="flex flex-col gap-2 rounded-lg border border-amber-400/40 bg-amber-950/50 px-3 py-2 text-sm text-amber-50">
+        <div className="flex flex-wrap items-center gap-2">
+          <span>
+            Pay mana · tap glowing sources
+            {manaTapGlow.size ? ` (${manaTapGlow.size})` : ''}
+          </span>
+          {(view.manaPaymentShortcutActions?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-amber-700 px-2 py-1 text-xs font-semibold disabled:opacity-40"
+              onClick={runManaShortcuts}
+              title="Tap each land that has exactly one TapLandForMana option"
+            >
+              Tap simple ({view.manaPaymentShortcutActions!.length})
+            </button>
+          )}
+          {passAction && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+              onClick={() => onSubmit(passAction)}
+            >
+              Confirm pay
+            </button>
+          )}
+          {cancelCast && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
+              onClick={() => onSubmit(cancelCast)}
+            >
+              Cancel cast
+            </button>
+          )}
+        </div>
+        {poolPinRow()}
       </div>
     ) : mode.kind === 'manaSource' ? (
       <div className="flex flex-col gap-2 rounded-lg border border-amber-400/40 bg-amber-950/50 px-3 py-2 text-sm text-amber-50">
@@ -925,6 +1042,184 @@ export function EngineBoard({
           onClick={confirmModes}
         >
           Confirm modes
+        </button>
+      </div>
+    ) : mode.kind === 'phyrexian' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-rose-400/40 bg-rose-950/50 px-3 py-2 text-sm text-rose-50">
+        <span>
+          Phyrexian mana · tap sources, pin pool, then choose life vs mana per shard
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {mode.detail.shards.map((s) => {
+            const pick = mode.picks.get(s.shardIndex) ?? 'mana'
+            const locked = s.options.type !== 'ManaOrLife'
+            return (
+              <button
+                key={s.shardIndex}
+                type="button"
+                disabled={busy || locked}
+                className={[
+                  'rounded px-2 py-1 text-xs ring-1 disabled:opacity-50',
+                  pick === 'life'
+                    ? 'bg-red-900/70 text-red-100 ring-red-400/50'
+                    : 'bg-slate-800 text-slate-100 ring-slate-500/50',
+                ].join(' ')}
+                onClick={() => {
+                  if (locked) return
+                  const next = new Map(mode.picks)
+                  next.set(s.shardIndex, pick === 'life' ? 'mana' : 'life')
+                  setMode({ ...mode, picks: next })
+                }}
+                title={
+                  locked
+                    ? `${s.options.type} (${s.color})`
+                    : `Toggle ${s.color}/P — now ${pick}`
+                }
+              >
+                {s.color[0]}/P · {pick === 'life' ? '2 life' : 'mana'}
+              </button>
+            )
+          })}
+        </div>
+        {poolPinRow()}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy || mode.detail.shards.length === 0}
+            className="rounded bg-rose-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+            onClick={() => {
+              const choices = phyrexianChoicesPayload(mode.detail.shards, mode.picks)
+              setMode({ kind: 'idle' })
+              onSubmit(buildSubmitPhyrexianChoices(choices))
+            }}
+          >
+            Confirm Phyrexian
+          </button>
+          {cancelCast && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
+              onClick={() => onSubmit(cancelCast)}
+            >
+              Cancel cast
+            </button>
+          )}
+        </div>
+      </div>
+    ) : mode.kind === 'chooseX' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-fuchsia-400/40 bg-fuchsia-950/50 px-3 py-2 text-sm text-fuchsia-50">
+        <span>
+          Choose X ({mode.detail.min}
+          {mode.detail.max !== mode.detail.min ? `–${mode.detail.max}` : ''})
+        </span>
+        <input
+          type="number"
+          className="w-20 rounded border border-fuchsia-700 bg-fuchsia-950 px-2 py-1 text-sm text-white"
+          min={mode.detail.min}
+          max={mode.detail.max}
+          value={mode.value}
+          disabled={busy || mode.detail.min > mode.detail.max}
+          onChange={(e) => {
+            const n = Number(e.target.value)
+            if (!Number.isFinite(n)) return
+            setMode({ ...mode, value: n })
+          }}
+        />
+        <button
+          type="button"
+          disabled={busy || !chooseXInRange(mode.detail, mode.value)}
+          className="rounded bg-fuchsia-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={() => {
+            setMode({ kind: 'idle' })
+            onSubmit(buildChooseX(mode.value))
+          }}
+        >
+          Confirm X
+        </button>
+        {cancelCast && (
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
+            onClick={() => onSubmit(cancelCast)}
+          >
+            Cancel cast
+          </button>
+        )}
+      </div>
+    ) : mode.kind === 'assistPlayer' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-teal-400/40 bg-teal-950/50 px-3 py-2 text-sm text-teal-50">
+        <span>
+          Assist — choose a helper (max generic {mode.detail.maxGeneric})
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {mode.detail.candidates.map((pid) => (
+            <button
+              key={pid}
+              type="button"
+              disabled={busy}
+              className="rounded bg-teal-700 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+              onClick={() => {
+                setMode({ kind: 'idle' })
+                onSubmit(buildChooseAssistPlayer(pid))
+              }}
+            >
+              {pid === 0 ? 'You' : `P${pid}`}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-slate-700 px-3 py-1 text-xs disabled:opacity-40"
+            onClick={() => {
+              setMode({ kind: 'idle' })
+              onSubmit(buildChooseAssistPlayer(null))
+            }}
+          >
+            Decline assist
+          </button>
+          {cancelCast && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-slate-800 px-2 py-1 text-xs disabled:opacity-40"
+              onClick={() => onSubmit(cancelCast)}
+            >
+              Cancel cast
+            </button>
+          )}
+        </div>
+      </div>
+    ) : mode.kind === 'assistPay' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-teal-400/40 bg-teal-950/50 px-3 py-2 text-sm text-teal-50">
+        <span>
+          Assist payment · contribute 0–{mode.detail.maxGeneric} generic
+          {mode.detail.caster != null ? ` for P${mode.detail.caster}` : ''}
+        </span>
+        <input
+          type="number"
+          className="w-20 rounded border border-teal-700 bg-teal-950 px-2 py-1 text-sm text-white"
+          min={0}
+          max={mode.detail.maxGeneric}
+          value={mode.value}
+          disabled={busy}
+          onChange={(e) => {
+            const n = Number(e.target.value)
+            if (!Number.isFinite(n)) return
+            setMode({ ...mode, value: n })
+          }}
+        />
+        <button
+          type="button"
+          disabled={busy || !assistPaymentInRange(mode.detail, mode.value)}
+          className="rounded bg-teal-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={() => {
+            setMode({ kind: 'idle' })
+            onSubmit(buildCommitAssistPayment(mode.value))
+          }}
+        >
+          Commit assist
         </button>
       </div>
     ) : waitingDetail?.kind === 'MulliganDecision' &&
