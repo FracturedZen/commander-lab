@@ -1,96 +1,116 @@
 /**
- * Phase engine Web Worker — owns WASM + card DB off the UI thread.
- * Message protocol (request/response with id):
- *   { id, type: 'boot' }
- *   { id, type: 'startGame', decks, seed, playerCount, firstPlayer }
- *   { id, type: 'getState', viewerId }
- *   { id, type: 'getLegalActions', viewerId }
- *   { id, type: 'submitAction', actor, action }
- *   { id, type: 'aiProposal', playerId, difficulty }
- *   { id, type: 'pass', actor }
+ * Phase boot Web Worker — fetch + WebAssembly.compile off the UI thread.
  *
- * Note: dynamic import of glue uses absolute URL passed from main thread.
+ * Full game authority stays on the main-thread PhaseAdapter (sync submit /
+ * legal / AI drive). Wasm-bindgen glue binds imports to the instantiating
+ * realm, so we only offload download+compile here and post the Module back.
+ *
+ * Protocol:
+ *   → { id, type: 'compileWasm', wasmUrl }
+ *   ← { id, type: 'progress', stage, message, bytesReceived?, bytesTotal?, fraction? }
+ *   ← { id, type: 'compileWasm', ok: true, module: WebAssembly.Module }
+ *   ← { id, ok: false, error }
+ *   → { id, type: 'ping' } → { id, ok: true, type: 'ping' }
  */
-let wasm = null
-let formatConfig = null
-
 function reply(id, payload) {
   self.postMessage({ id, ...payload })
 }
 
-function unwrapInit(raw) {
-  if (raw && typeof raw === 'object' && 'status' in raw) {
-    const r = raw
-    if (r.status === 'error' || r.status === 'rejected' || r.status === 'occupied') {
-      throw new Error(r.error || (r.reasons && r.reasons.join('; ')) || r.status)
-    }
-    return r.result ?? raw
+function formatBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return '—'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+async function fetchBytes(url, onBytes) {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + url)
+  const lenHeader = res.headers.get('content-length')
+  const totalNum = lenHeader ? Number(lenHeader) : null
+  const total = totalNum && Number.isFinite(totalNum) && totalNum > 0 ? totalNum : null
+
+  if (!res.body) {
+    const buf = await res.arrayBuffer()
+    onBytes(buf.byteLength, buf.byteLength)
+    return buf
   }
-  return raw
+
+  const reader = res.body.getReader()
+  const chunks = []
+  let received = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) {
+      chunks.push(value)
+      received += value.byteLength
+      onBytes(received, total)
+    }
+  }
+  const out = new Uint8Array(received)
+  let offset = 0
+  for (const c of chunks) {
+    out.set(c, offset)
+    offset += c.byteLength
+  }
+  onBytes(received, total ?? received)
+  return out.buffer
 }
 
 self.onmessage = async (ev) => {
   const msg = ev.data || {}
   const { id, type } = msg
   try {
-    if (type === 'boot') {
-      const glueUrl = msg.glueUrl
+    if (type === 'ping') {
+      reply(id, { ok: true, type: 'ping' })
+      return
+    }
+    if (type === 'compileWasm') {
       const wasmUrl = msg.wasmUrl
-      const cardDataText = msg.cardDataText
-      if (!glueUrl || !wasmUrl || !cardDataText) throw new Error('boot requires glueUrl, wasmUrl, cardDataText')
-      wasm = await import(glueUrl)
-      await wasm.default({ module_or_path: wasmUrl })
-      wasm.load_card_database(cardDataText)
-      const registry = wasm.getFormatRegistry()
-      const commander = registry.find((f) => f.format === 'Commander')
-      if (!commander) throw new Error('Commander format missing')
-      formatConfig = commander.default_config
-      reply(id, { ok: true, type: 'boot' })
-      return
-    }
-    if (!wasm || !formatConfig) throw new Error('Worker not booted')
-
-    if (type === 'startGame') {
-      wasm.clear_game_state()
-      const raw = wasm.initialize_game(
-        msg.decks,
-        msg.seed ?? 1,
-        formatConfig,
-        msg.matchConfig ?? { match_type: 'Bo1' },
-        msg.playerCount ?? 2,
-        msg.firstPlayer ?? 0,
-      )
-      reply(id, { ok: true, type: 'startGame', result: unwrapInit(raw) })
-      return
-    }
-    if (type === 'getState') {
-      reply(id, { ok: true, type: 'getState', result: wasm.get_filtered_game_state(msg.viewerId ?? 0) })
-      return
-    }
-    if (type === 'getLegalActions') {
+      if (!wasmUrl) throw new Error('compileWasm requires wasmUrl')
       reply(id, {
-        ok: true,
-        type: 'getLegalActions',
-        result: wasm.get_legal_actions_for_viewer_js(msg.viewerId ?? 0),
+        type: 'progress',
+        stage: 'wasm',
+        message: 'Worker downloading WASM…',
+        bytesReceived: 0,
+        bytesTotal: null,
+        fraction: 0,
       })
+      const bytes = await fetchBytes(wasmUrl, (received, total) => {
+        const frac = total && total > 0 ? Math.min(1, received / total) : received > 0 ? 0.5 : 0
+        reply(id, {
+          type: 'progress',
+          stage: 'wasm',
+          message:
+            total && total > 0
+              ? 'Worker downloading WASM… ' + formatBytes(received) + ' / ' + formatBytes(total)
+              : 'Worker downloading WASM… ' + formatBytes(received),
+          bytesReceived: received,
+          bytesTotal: total,
+          fraction: frac,
+        })
+      })
+      reply(id, {
+        type: 'progress',
+        stage: 'init',
+        message: 'Worker compiling WASM…',
+        bytesReceived: bytes.byteLength,
+        bytesTotal: bytes.byteLength,
+        fraction: 0,
+      })
+      const module = await WebAssembly.compile(bytes)
+      reply(id, {
+        type: 'progress',
+        stage: 'init',
+        message: 'WASM module compiled in worker',
+        fraction: 1,
+      })
+      // WebAssembly.Module is structured-cloneable
+      reply(id, { ok: true, type: 'compileWasm', module })
       return
     }
-    if (type === 'submitAction') {
-      const raw = wasm.submit_action(msg.actor ?? 0, msg.action)
-      reply(id, { ok: true, type: 'submitAction', result: raw })
-      return
-    }
-    if (type === 'pass') {
-      const raw = wasm.submit_action(msg.actor ?? 0, { type: 'PassPriority' })
-      reply(id, { ok: true, type: 'pass', result: raw })
-      return
-    }
-    if (type === 'aiProposal') {
-      const raw = wasm.get_ai_action_proposal(msg.difficulty || 'Medium', msg.playerId ?? 1)
-      reply(id, { ok: true, type: 'aiProposal', result: raw })
-      return
-    }
-    throw new Error(`Unknown worker message type: ${type}`)
+    throw new Error('Unknown worker message type: ' + type)
   } catch (err) {
     reply(id, { ok: false, error: err instanceof Error ? err.message : String(err) })
   }

@@ -618,7 +618,9 @@ export function buildPhaseBoardView(
 
   const objects = state.objects
   const phaseRaw = phaseString(state)
-  const seats: PhaseSeatView[] = state.players.map((p, idx) => {
+  const seats: PhaseSeatView[] = (state.players ?? [])
+    .filter((p): p is RawPlayer => p != null && typeof p === 'object')
+    .map((p, idx) => {
     const id = p.id ?? idx
     const hand = resolveIds(p.hand, objects, 'hand')
     const gy = resolveIds(p.graveyard, objects, 'graveyard')

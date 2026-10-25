@@ -5,15 +5,53 @@ import {
   stageOverall,
   type BootProgressCb,
 } from './bootProgress'
+import {
+  bootWorkerUnavailable,
+  compileWasmInWorker,
+  isPhaseWasmCached,
+  yieldToMain,
+} from './phaseBootWorker'
 import type { PhaseWasmModule } from './types'
 
 let cached: PhaseWasmModule | null = null
 let loadPromise: Promise<PhaseWasmModule> | null = null
 
+async function resolveWasmUrl(): Promise<string> {
+  const localWasm = `${import.meta.env.BASE_URL}engine/engine_wasm_bg.wasm`
+  try {
+    const probe = await fetch(localWasm, { method: 'HEAD' })
+    if (probe.ok) return new URL(localWasm, window.location.origin).href
+  } catch {
+    /* use CDN */
+  }
+  return PHASE_CDN.wasmUrl
+}
+
+async function instantiateOnMain(
+  mod: PhaseWasmModule,
+  source: WebAssembly.Module | Response,
+  onProgress?: BootProgressCb,
+): Promise<void> {
+  onProgress?.({
+    stage: 'init',
+    message: 'Instantiating WASM on main thread…',
+    fraction: stageOverall('init', 0.2),
+    stageFraction: 0.2,
+  })
+  await yieldToMain()
+  await mod.default({ module_or_path: source })
+  onProgress?.({
+    stage: 'init',
+    message: 'WASM ready',
+    fraction: stageOverall('init', 1),
+    stageFraction: 1,
+  })
+}
+
 /**
- * Load Phase engine-wasm glue (code-split) and instantiate WASM (CDN or local).
- * Safe to call multiple times — returns the same module.
- * On failure the promise is cleared so Retry can call again.
+ * Load Phase engine-wasm glue and instantiate WASM.
+ * Prefers Worker download+compile (UI stays interactive); falls back to
+ * main-thread fetch if Worker is blocked. Safe to call multiple times.
  */
 export async function loadPhaseWasm(
   onProgress?: BootProgressCb,
@@ -21,7 +59,7 @@ export async function loadPhaseWasm(
   if (cached) {
     onProgress?.({
       stage: 'init',
-      message: 'WASM already loaded',
+      message: 'WASM already loaded (memory)',
       fraction: stageOverall('init', 1),
       stageFraction: 1,
       fromCache: true,
@@ -37,6 +75,7 @@ export async function loadPhaseWasm(
       fraction: stageOverall('glue', 0),
       stageFraction: 0,
     })
+    await yieldToMain()
     const mod = (await import('./phase/engine_wasm.js')) as unknown as PhaseWasmModule
     onProgress?.({
       stage: 'glue',
@@ -45,22 +84,48 @@ export async function loadPhaseWasm(
       stageFraction: 1,
     })
 
-    const localWasm = `${import.meta.env.BASE_URL}engine/engine_wasm_bg.wasm`
-    let wasmUrl: string = PHASE_CDN.wasmUrl
-    try {
-      const probe = await fetch(localWasm, { method: 'HEAD' })
-      if (probe.ok) wasmUrl = new URL(localWasm, window.location.origin).href
-    } catch {
-      /* use CDN */
+    const wasmUrl = await resolveWasmUrl()
+    const swCached = await isPhaseWasmCached(wasmUrl)
+    if (swCached) {
+      onProgress?.({
+        stage: 'wasm',
+        message: 'WASM in service-worker cache — compiling…',
+        fraction: stageOverall('wasm', 0.85),
+        stageFraction: 0.85,
+        fromCache: true,
+      })
     }
 
+    // Prefer Worker compile path
+    if (!bootWorkerUnavailable()) {
+      try {
+        const compiled = await compileWasmInWorker(wasmUrl, onProgress)
+        await instantiateOnMain(mod, compiled, onProgress)
+        cached = mod
+        return mod
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        onProgress?.({
+          stage: 'wasm',
+          message: `Worker boot unavailable (${msg}) — main-thread fallback…`,
+          fraction: stageOverall('wasm', 0),
+          stageFraction: 0,
+        })
+        await yieldToMain()
+      }
+    }
+
+    // Main-thread fallback: streamed fetch + instantiate
     onProgress?.({
       stage: 'wasm',
-      message: 'Downloading Phase WASM (~39 MB)…',
+      message: swCached
+        ? 'Reading cached WASM on main thread…'
+        : 'Downloading Phase WASM (~39 MB)…',
       fraction: stageOverall('wasm', 0),
       stageFraction: 0,
       bytesReceived: 0,
       bytesTotal: null,
+      fromCache: swCached,
     })
 
     const bytes = await fetchBytesWithProgress(wasmUrl, (received, total) => {
@@ -75,28 +140,15 @@ export async function loadPhaseWasm(
         stageFraction: stageFraction || undefined,
         bytesReceived: received,
         bytesTotal: total,
+        fromCache: swCached,
       })
     })
 
-    onProgress?.({
-      stage: 'init',
-      message: 'Instantiating WASM…',
-      fraction: stageOverall('init', 0),
-      stageFraction: 0,
-      bytesReceived: bytes.byteLength,
-      bytesTotal: bytes.byteLength,
-    })
-    await mod.default({
-      module_or_path: new Response(bytes, {
-        headers: { 'Content-Type': 'application/wasm' },
-      }),
-    })
-    onProgress?.({
-      stage: 'init',
-      message: 'WASM ready',
-      fraction: stageOverall('init', 1),
-      stageFraction: 1,
-    })
+    await instantiateOnMain(
+      mod,
+      new Response(bytes, { headers: { 'Content-Type': 'application/wasm' } }),
+      onProgress,
+    )
     cached = mod
     return mod
   })()

@@ -4,6 +4,7 @@ import {
   getPhaseAdapter,
   runHeadlessGoldfish,
   goldfishStubDecksForCount,
+  playerCountFromDeckList,
   sanitizePhasePlayer,
   toPhaseMultiDeckList,
   linesFromActionPayload,
@@ -338,12 +339,12 @@ export function EnginePlayPage() {
       await boot()
       if (!adapter.isReady) return
     }
-    const n =
-      seats ??
-      Math.max(
-        2,
-        1 + 1 + (Array.isArray(deckList.ai_decks) ? deckList.ai_decks.length : 0),
-      )
+    const fromList = playerCountFromDeckList(deckList, seats ?? 2)
+    // Trust DeckList difficulties; if caller passed seats that match, keep them.
+    const n = Math.max(
+      2,
+      Math.min(MAX_TABLE, seats != null && seats === fromList ? seats : fromList),
+    )
     setBusy(true)
     setAiBusy(true)
     try {
@@ -680,6 +681,11 @@ export function EnginePlayPage() {
               />
             </div>
             <p className="mt-1.5 truncate text-[11px] text-slate-400">
+              {bootProgress?.fromCache && status.kind !== 'error' ? (
+                <span className="mr-1.5 rounded bg-emerald-950/80 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300 ring-1 ring-emerald-700/60">
+                  cached
+                </span>
+              ) : null}
               {status.kind === 'error'
                 ? status.message
                 : bootProgress?.message ||

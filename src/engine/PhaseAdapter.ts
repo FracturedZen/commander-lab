@@ -1,7 +1,12 @@
 import { PHASE_AI_DIFFICULTY } from './config'
-import { loadPhaseCardDataText } from './cardDataCache'
+import { hasCachedPhaseCardData, loadPhaseCardDataText } from './cardDataCache'
 import { loadPhaseWasm } from './loadPhaseWasm'
 import { stageOverall, type BootProgressCb } from './bootProgress'
+import {
+  describeBootCache,
+  isPhaseWasmCached,
+  yieldToMain,
+} from './phaseBootWorker'
 import type {
   EngineStatus,
   PhaseAiProposal,
@@ -98,16 +103,35 @@ export class PhaseAdapter {
 
   async boot(onProgress?: BootProgressCb): Promise<void> {
     try {
+      const [wasmCached, cardCached] = await Promise.all([
+        isPhaseWasmCached(),
+        hasCachedPhaseCardData(),
+      ])
+      onProgress?.({
+        stage: 'glue',
+        message: describeBootCache({ wasmCached, cardCached }),
+        fraction: stageOverall('glue', 0),
+        stageFraction: 0,
+        fromCache: wasmCached && cardCached,
+      })
+      await yieldToMain()
+
       this.status = { kind: 'loading', detail: 'WASM' }
       this.wasm = await loadPhaseWasm(onProgress)
       this.status = { kind: 'loading', detail: 'card-data' }
-      const { text, hash } = await loadPhaseCardDataText(onProgress)
+      await yieldToMain()
+      const { text, hash, fromCache } = await loadPhaseCardDataText(onProgress)
       onProgress?.({
         stage: 'load-db',
-        message: 'Loading card database into engine…',
+        message: fromCache
+          ? 'Loading cached card database into engine…'
+          : 'Loading card database into engine…',
         fraction: stageOverall('load-db', 0),
         stageFraction: 0,
+        fromCache,
       })
+      // Sync parse is unavoidably on the main thread (wasm-bindgen instance lives here).
+      await yieldToMain()
       this.wasm.load_card_database(text)
       this.cardHash = hash
       onProgress?.({
@@ -129,9 +153,13 @@ export class PhaseAdapter {
       this.status = { kind: 'ready' }
       onProgress?.({
         stage: 'ready',
-        message: `Phase ready (card-data ${hash})`,
+        message:
+          wasmCached && cardCached
+            ? `Phase ready (cached · card-data ${hash})`
+            : `Phase ready (card-data ${hash})`,
         fraction: 1,
         stageFraction: 1,
+        fromCache: wasmCached && cardCached,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

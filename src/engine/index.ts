@@ -15,6 +15,7 @@ export {
   toPhaseMultiDeckList,
   sampleToPhasePlayer,
   emptyPhasePlayerDeck,
+  playerCountFromDeckList,
 } from './deckMap'
 export { runHeadlessGoldfish } from './headlessGoldfish'
 export type { GoldfishResult } from './headlessGoldfish'

@@ -295,8 +295,9 @@ export function EngineBoard({
   onConcede,
   onRematch,
 }: Props) {
-  const you = view.seats[0]
-  const opponents = view.seats.slice(1)
+  const seats = (view.seats ?? []).filter(Boolean)
+  const you = seats[0]
+  const opponents = seats.slice(1)
   const [inspect, setInspect] = useState<PhaseObjectView | null>(null)
   const [picker, setPicker] = useState<{
     objectId: string

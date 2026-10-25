@@ -109,3 +109,16 @@ export async function loadPhaseCardDataText(
   })
   return { text, hash, fromCache: false }
 }
+
+/** True when IndexedDB holds the pinned card-data hash (instant card-data stage). */
+export async function hasCachedPhaseCardData(): Promise<boolean> {
+  try {
+    const database = await db()
+    const cached = await database.get('meta', 'card-data')
+    if (cached?.hash !== PHASE_CDN.cardDataHash) return false
+    const blob = await database.get('blobs', 'card-data')
+    return Boolean(blob?.text)
+  } catch {
+    return false
+  }
+}

@@ -60,9 +60,22 @@ export function toPhaseDeckList(
   return {
     player,
     opponent: opp,
-    ai_decks: [opp],
+    // Seat 1 is `opponent` only — do not also put it in ai_decks (that is seat 2+).
+    ai_decks: [],
     ai_difficulties: [aiDifficulty],
   }
+}
+
+/** Derive Phase player_count from a DeckList (prefer ai_difficulties length). */
+export function playerCountFromDeckList(decks: PhaseDeckList, fallback = 2): number {
+  const diffs = Array.isArray(decks.ai_difficulties) ? decks.ai_difficulties.length : 0
+  if (diffs >= 1) return Math.max(2, Math.min(4, diffs + 1))
+  const extras = Array.isArray(decks.ai_decks) ? decks.ai_decks.length : 0
+  // opponent + extras (ai_decks are seats 2.. only) when any deck payload present
+  if (decks.opponent || extras > 0 || decks.player) {
+    return Math.max(2, Math.min(4, 2 + extras))
+  }
+  return Math.max(2, Math.min(4, fallback))
 }
 
 /** Expand sample deck JSON {name,quantity} lists without IndexedDB. */
@@ -113,7 +126,7 @@ export function toPhaseMultiDeckList(
   return {
     player,
     opponent,
-    // Phase: seat1 = opponent; ai_decks[i] = seat i+2. Also keep opponent in
+    // Phase: seat1 = opponent; ai_decks[i] = seat i+2. Difficulties align with
     // ai_difficulties alignment: one difficulty per non-human seat.
     ai_decks: extra,
     ai_difficulties: Array.from({ length: playerCount - 1 }, () => difficulty),

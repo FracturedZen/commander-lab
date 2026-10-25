@@ -35,7 +35,7 @@ export function goldfishStubDecks(
   return {
     player,
     opponent,
-    ai_decks: [opponent],
+    ai_decks: [],
     ai_difficulties: [aiDifficulty],
   }
 }
