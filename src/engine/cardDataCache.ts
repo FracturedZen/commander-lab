@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
-import { PHASE_CDN } from './config'
+import { PHASE_CDN, PHASE_LOCAL, type PhaseLocalManifest } from './config'
 import {
   fetchBytesWithProgress,
   formatBytes,
@@ -71,17 +71,57 @@ export async function bytesToUtf8Yielding(
   return parts.join('')
 }
 
+async function resolveCardDataSource(): Promise<{
+  hash: string
+  url: string
+  from: 'phase-local' | 'cdn'
+}> {
+  const base = import.meta.env.BASE_URL
+  try {
+    const manRes = await fetch(`${base}${PHASE_LOCAL.manifestPath}`, { cache: 'no-cache' })
+    if (manRes.ok) {
+      const man = (await manRes.json()) as PhaseLocalManifest
+      const file = man.cardDataFile || PHASE_LOCAL.cardDataPath.replace(/^phase\//, '')
+      const hash = man.cardDataHash
+      if (hash && file) {
+        const localPath = `${base}phase/${file}`
+        const probe = await fetch(localPath, { method: 'HEAD' })
+        if (probe.ok) {
+          const origin = typeof window !== 'undefined' ? window.location.origin : ''
+          return {
+            hash,
+            url: origin ? new URL(localPath, origin).href : localPath,
+            from: 'phase-local',
+          }
+        }
+      }
+    }
+  } catch {
+    /* CDN */
+  }
+  return { hash: PHASE_CDN.cardDataHash, url: PHASE_CDN.cardDataUrl, from: 'cdn' }
+}
+
 /**
  * Resolve Phase card-data.json text pinned to the WASM build we ship against.
- * Prefer IndexedDB cache matching PHASE_CDN.cardDataHash; otherwise download
- * with byte progress. CDN already serves brotli (~7 MB wire → ~95 MB decoded).
+ * Prefer public/phase (fork build) when manifest + file exist; else IndexedDB
+ * cache matching the active hash; else download (CDN brotli ~7 MB wire).
  * Keeps v1 text blobs working for “Already cached — instant”.
  */
 export async function loadPhaseCardDataText(
   onProgress?: BootProgressCb,
 ): Promise<{ text: string; hash: string; fromCache: boolean }> {
-  const hash = PHASE_CDN.cardDataHash
-  const url = PHASE_CDN.cardDataUrl
+  const resolved = await resolveCardDataSource()
+  const hash = resolved.hash
+  const url = resolved.url
+  if (resolved.from === 'phase-local') {
+    onProgress?.({
+      stage: 'card-data',
+      message: `Card-data source: local Phase fork (${hash})…`,
+      fraction: stageOverall('card-data', 0.02),
+      stageFraction: 0.02,
+    })
+  }
 
   await yieldToMain()
   const database = await db()

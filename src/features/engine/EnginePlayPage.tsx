@@ -673,7 +673,7 @@ export function EnginePlayPage() {
     <div className="mx-auto flex max-w-5xl flex-col gap-3 px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-white">Play · Phase Engine <span className="text-xs font-normal text-slate-500">v0.7.8</span></h1>
+          <h1 className="text-lg font-semibold text-white">Play · Phase Engine <span className="text-xs font-normal text-slate-500">v0.7.9</span></h1>
           <p className="text-xs text-slate-400">
             Real MTG rules (stack, priority, combat, SBAs). Multi-seat Commander vs Phase AI.
           </p>

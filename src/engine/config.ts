@@ -5,7 +5,18 @@ export const ENGINE_MODE_DEFAULT: EngineMode = 'phase'
 
 export const ENGINE_SETTINGS_KEY = 'engineMode'
 
-/** Phase CDN + local glue paths (see public/engine/manifest.json). */
+/**
+ * Self-hosted / fork build under public/phase/ (see scripts/build-phase-engine.sh).
+ * When wasm (+ optional card-data) exist, loaders prefer these over PHASE_CDN.
+ */
+export const PHASE_LOCAL = {
+  manifestPath: 'phase/manifest.json',
+  wasmPath: 'phase/engine_wasm_bg.wasm',
+  cardDataPath: 'phase/card-data.json',
+  gluePath: 'phase/engine_wasm.js',
+} as const
+
+/** Phase CDN + vendored glue paths (see public/engine/manifest.json). */
 export const PHASE_CDN = {
   metaUrl: 'https://data.phase-rs.dev/staging/card-data-meta.json',
   wasmUrl:
@@ -20,3 +31,18 @@ export const PHASE_CDN = {
 } as const
 
 export const PHASE_AI_DIFFICULTY = 'Medium' as const
+
+/** Shape written by scripts/build-phase-engine.sh into public/phase/manifest.json */
+export type PhaseLocalManifest = {
+  preferLocal?: boolean
+  phaseCommit?: string
+  phaseBranch?: string
+  profile?: string
+  builtAt?: string
+  wasmFile?: string
+  wasmSha256?: string
+  cardDataFile?: string | null
+  cardDataHash?: string | null
+  note?: string
+  source?: string
+}

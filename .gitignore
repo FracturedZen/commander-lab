@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Self-hosted Phase binaries (built by scripts/build-phase-engine.sh)
+public/phase/*.wasm
+public/phase/card-data*.json
+public/phase/engine_wasm.js
+public/engine/engine_wasm_bg.wasm
+public/engine/card-data*.json

@@ -1,5 +1,7 @@
 # Phase rules engine (Commander Lab)
 
+Fidelity / fork roadmap: **[ENGINE_FIDELITY.md](./ENGINE_FIDELITY.md)** (Arena bar, FracturedZen/phase, local `public/phase` builds, coverage path). Do not claim Arena parity.
+
 ## Decision
 
 **Rules authority for engine mode:** [Phase](https://github.com/phase-rs/phase) (`phase-rs/phase`, Apache-2.0 / MIT).
@@ -22,8 +24,11 @@ src/engine/PhaseAdapter  ←── rules authority when ENGINE_MODE=phase
         │
         ▼
 public/engine/engine_wasm.js (vendored glue)
-        + CDN WASM (~39 MB) + card-data (~96 MB, IndexedDB cache)
+        + prefer public/phase/ WASM+card-data when built (fork)
+        + else CDN WASM (~39 MB) + card-data (~96 MB, IndexedDB cache)
 ```
+
+Local rebuild: `./scripts/build-phase-engine.sh [../phase] [release|wasm-dev]` → stages `public/phase/` + updates glue. See ENGINE_FIDELITY.md.
 
 - **UI only submits engine-legal actions** (`get_legal_actions_for_viewer_js` → client `assertActionSubmittable` gate → `submit_action`). Phase WASM remains the final rejector.
 - Legacy table (`/` · nav **Legacy**) keeps lighter zone/mana rules for offline sandboxes; **Play** nav (`/engine`) is the Phase-backed real play path.
@@ -105,7 +110,7 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `phase-worker.js` | Boot Worker: fetch + `WebAssembly.compile` off main; posts Module + progress |
 | `../features/engine/EngineBoard.tsx` | Arena board + phone sticky action dock (WaitingFor banners + Pass); multi-seat opponent chrome; stack rail, targeting, combat, mana chrome, ActivateAbility, priority banner, command cast+spellCosts, Concede/Rematch |
 
-## How to play (v0.7.8+)
+## How to play (v0.7.9+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** — staged progress (glue → WASM download/compile → instantiate → card-data download/decode/cache → Phase `load_card_database` → ready). **Worker boot** (v0.7.4): `phase-worker.js` fetch + `WebAssembly.compile` off main; main instantiates/binds. **Card-data soft boot** (v0.7.5): CDN already serves **brotli ~7.1 MB** (decoded ~95 MB); chunked UTF-8 decode with `requestIdleCallback` / `scheduler.yield` between 2 MiB slices; IDB stores ArrayBuffer for new downloads (legacy text blobs still count as cached); clear “UI may pause” stage before sync `load_card_database` (cannot split — Phase JSON string API only). No card-data split (Phase has no chunked load). **Cached** badge + “Already cached — instant boot” when SW WASM + IDB card-data warm. **Retry boot** on failure. Start also boots automatically.
@@ -141,6 +146,7 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) for dri
 - OpenRouter Engine coach (v0.7.6): Coach advice drawer; Settings key reuse; compact summary; no auto-submit.
 - Mid-game Save/Resume + Coach→glow (v0.7.7): Phase `export_game_state_json` / `restore_game_state` / `resume_restored_game_state` → IDB with deck picks + playerCount; setup Resume; coach line matches focus violet glow (no auto-submit).
 - Legal submit gate (v0.7.8): every human `submitAction` must match `get_legal_actions*` (cast/activate ignore `payment_mode`) or a WaitingFor response type for the current `waiting_for`, or Concede. Phase AI proposals may `skipLegalGate` (WASM still rejects). Coach never submits. Show all = `flatActions` only. `npm run test:legal-submit`.
+- Prefer-local Phase (v0.7.9): loader prefers `public/phase` WASM + card-data when present (`scripts/build-phase-engine.sh`); else pinned CDN. Fork fidelity roadmap: ENGINE_FIDELITY.md. First fork win: prenominal exiled/face-up (#10281) on FracturedZen/phase `c96a124`.
 - Full game-in-worker / off-main `load_card_database` still blocked. Vote / draft / banding still stubbed.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.
 - Local `build-wasm.sh` may take a long time on the box; CDN path is the supported deploy path.

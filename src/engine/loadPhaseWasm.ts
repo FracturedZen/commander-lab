@@ -1,4 +1,4 @@
-import { PHASE_CDN } from './config'
+import { PHASE_CDN, PHASE_LOCAL, type PhaseLocalManifest } from './config'
 import {
   fetchBytesWithProgress,
   formatBytes,
@@ -16,15 +16,47 @@ import type { PhaseWasmModule } from './types'
 let cached: PhaseWasmModule | null = null
 let loadPromise: Promise<PhaseWasmModule> | null = null
 
-async function resolveWasmUrl(): Promise<string> {
-  const localWasm = `${import.meta.env.BASE_URL}engine/engine_wasm_bg.wasm`
+export type ResolvedWasmSource = {
+  url: string
+  from: 'phase-local' | 'engine-local' | 'cdn'
+  phaseCommit?: string
+}
+
+async function readPhaseLocalManifest(): Promise<PhaseLocalManifest | null> {
+  const url = `${import.meta.env.BASE_URL}${PHASE_LOCAL.manifestPath}`
   try {
-    const probe = await fetch(localWasm, { method: 'HEAD' })
-    if (probe.ok) return new URL(localWasm, window.location.origin).href
+    const res = await fetch(url, { cache: 'no-cache' })
+    if (!res.ok) return null
+    return (await res.json()) as PhaseLocalManifest
   } catch {
-    /* use CDN */
+    return null
   }
-  return PHASE_CDN.wasmUrl
+}
+
+/** Prefer public/phase (fork build), then public/engine, then CDN pin. */
+export async function resolveWasmUrl(): Promise<ResolvedWasmSource> {
+  const base = import.meta.env.BASE_URL
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const candidates: Array<{ path: string; from: ResolvedWasmSource['from'] }> = [
+    { path: `${base}${PHASE_LOCAL.wasmPath}`, from: 'phase-local' },
+    { path: `${base}engine/engine_wasm_bg.wasm`, from: 'engine-local' },
+  ]
+  const manifest = await readPhaseLocalManifest()
+  for (const c of candidates) {
+    try {
+      const probe = await fetch(c.path, { method: 'HEAD' })
+      if (probe.ok) {
+        return {
+          url: origin ? new URL(c.path, origin).href : c.path,
+          from: c.from,
+          phaseCommit: manifest?.phaseCommit,
+        }
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  return { url: PHASE_CDN.wasmUrl, from: 'cdn', phaseCommit: manifest?.phaseCommit }
 }
 
 async function instantiateOnMain(
@@ -84,7 +116,20 @@ export async function loadPhaseWasm(
       stageFraction: 1,
     })
 
-    const wasmUrl = await resolveWasmUrl()
+    const resolved = await resolveWasmUrl()
+    const wasmUrl = resolved.url
+    const sourceLabel =
+      resolved.from === 'phase-local'
+        ? 'local Phase fork'
+        : resolved.from === 'engine-local'
+          ? 'local engine/'
+          : 'CDN'
+    onProgress?.({
+      stage: 'wasm',
+      message: `WASM source: ${sourceLabel}${resolved.phaseCommit ? ` @ ${resolved.phaseCommit.slice(0, 7)}` : ''}…`,
+      fraction: stageOverall('wasm', 0.02),
+      stageFraction: 0.02,
+    })
     const swCached = await isPhaseWasmCached(wasmUrl)
     if (swCached) {
       onProgress?.({

@@ -1,4 +1,4 @@
-export { ENGINE_MODE_DEFAULT, ENGINE_SETTINGS_KEY, PHASE_CDN, PHASE_AI_DIFFICULTY } from './config'
+export { ENGINE_MODE_DEFAULT, ENGINE_SETTINGS_KEY, PHASE_CDN, PHASE_LOCAL, PHASE_AI_DIFFICULTY } from './config'
 export type { EngineMode } from './config'
 export { PhaseAdapter, getPhaseAdapter } from './PhaseAdapter'
 export { loadPhaseWasm, getCachedPhaseWasm } from './loadPhaseWasm'
