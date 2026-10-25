@@ -73,6 +73,8 @@ export type PhaseBoardView = {
   manaPaymentShortcutActions: PhaseGameAction[]
   /** pending_cast.pinned_pool_units — pip ids already spent toward the cost. */
   pinnedPoolUnits: number[]
+  /** object id → oracle/name for off-board WaitingFor modals (library search/scry). */
+  objectNames: Record<string, string>
 }
 
 type RawObj = {
@@ -387,6 +389,7 @@ export function buildPhaseBoardView(
       autoPass,
       manaPaymentShortcutActions,
       pinnedPoolUnits: [],
+      objectNames: {},
     }
   }
 
@@ -434,6 +437,13 @@ export function buildPhaseBoardView(
     }
   })
 
+  const objectNames: Record<string, string> = {}
+  for (const [k, obj] of Object.entries(objects)) {
+    const name = typeof obj.name === 'string' ? obj.name : ''
+    if (name) objectNames[String(k)] = name
+    if (obj.id != null) objectNames[String(obj.id)] = name || objectNames[String(obj.id)] || ''
+  }
+
   return {
     ok: true,
     turnNumber: state.turn_number ?? 1,
@@ -451,6 +461,7 @@ export function buildPhaseBoardView(
     autoPass,
     manaPaymentShortcutActions,
     pinnedPoolUnits: parsePinnedPoolUnits(state),
+    objectNames,
   }
 }
 

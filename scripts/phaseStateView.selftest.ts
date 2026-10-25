@@ -130,6 +130,10 @@ import {
   buildCommitAssistPayment,
   buildSpendPoolMana,
   buildUnspendPoolMana,
+  buildOrderTriggers,
+  buildChooseReplacement,
+  buildChooseReplacementAndRemember,
+  buildSubmitPayAmount,
   defaultPhyrexianChoices,
   phyrexianChoicesPayload,
   chooseXInRange,
@@ -137,6 +141,11 @@ import {
   derivedEngineStops,
   discardReady,
   manaTapObjectIds,
+  libraryBipartReady,
+  reorderCardsReady,
+  cardPickReady,
+  payAmountInRange,
+  isReplacementOrderMode,
 } from '../src/engine/engineInteraction.ts'
 
 const waitAtk = parseWaitingFor({
@@ -361,5 +370,156 @@ assert(viewPool.pinnedPoolUnits.includes(101), 'pinned units')
 
 const stopsPhy = derivedEngineStops(waitPhy, 'main1')
 assert(stopsPhy.has('main1'), 'rail stop phyrexian')
+
+// --- v0.6.5 Search / Scry / OrderTriggers / Replacement / PayAmount ---
+const waitScry = parseWaitingFor({
+  type: 'ScryChoice',
+  data: { player: 0, cards: [21, 22, 23] },
+})
+assert(waitScry?.kind === 'LibraryBipart', 'parse ScryChoice')
+if (waitScry?.kind === 'LibraryBipart') {
+  assert(waitScry.cards.length === 3, 'scry cards')
+  assert(libraryBipartReady(waitScry, ['21', '22']), 'scry keep subset')
+  assert(!libraryBipartReady(waitScry, ['21', '99']), 'scry reject foreign')
+  assert(buildSelectCards(['21']).type === 'SelectCards', 'scry submit')
+}
+
+const waitSurveil = parseWaitingFor({
+  type: 'SurveilChoice',
+  data: { player: 0, cards: [30] },
+})
+assert(waitSurveil?.kind === 'LibraryBipart' && waitSurveil.type === 'SurveilChoice', 'surveil')
+
+const waitRipple = parseWaitingFor({
+  type: 'RippleBottomOrder',
+  data: { player: 0, cards: [1, 2] },
+})
+assert(waitRipple?.kind === 'ReorderCards', 'parse RippleBottomOrder')
+if (waitRipple?.kind === 'ReorderCards') {
+  assert(reorderCardsReady(waitRipple, ['2', '1']), 'ripple perm')
+  assert(!reorderCardsReady(waitRipple, ['1']), 'ripple incomplete')
+}
+
+const waitDigRest = parseWaitingFor({
+  type: 'DigRestSplitChoice',
+  data: { player: 0, cards: [4, 5, 6], top_count: 1, scope: { type: 'OrderOnly' } },
+})
+assert(waitDigRest?.kind === 'ReorderCards', 'parse DigRestSplit')
+if (waitDigRest?.kind === 'ReorderCards') {
+  assert(waitDigRest.topCount === 1 && waitDigRest.orderOnly, 'dig rest fields')
+  assert(reorderCardsReady(waitDigRest, ['4', '5', '6']), 'dig rest order-only keep top')
+  assert(!reorderCardsReady(waitDigRest, ['5', '4', '6']), 'dig rest cannot cross')
+}
+
+const waitArrange = parseWaitingFor({
+  type: 'ArrangePlanarDeckTopChoice',
+  data: { player: 0, cards: [7, 8, 9], keep_on_top: 2 },
+})
+assert(waitArrange?.kind === 'ReorderCards', 'parse ArrangePlanar')
+if (waitArrange?.kind === 'ReorderCards') {
+  assert(waitArrange.exactKeepCount === 2, 'planar keep')
+  assert(reorderCardsReady(waitArrange, ['7', '9']), 'planar ready')
+  assert(!reorderCardsReady(waitArrange, ['7']), 'planar short')
+}
+
+const waitSearch = parseWaitingFor({
+  type: 'SearchChoice',
+  data: {
+    player: 0,
+    cards: [40, 41, 42],
+    count: 2,
+    up_to: true,
+    allows_partial_find: true,
+    ordering_hint: { type: 'OrderedToLibraryTop' },
+  },
+})
+assert(waitSearch?.kind === 'CardPick', 'parse SearchChoice')
+if (waitSearch?.kind === 'CardPick') {
+  assert(waitSearch.upTo && waitSearch.ordered && waitSearch.count === 2, 'search flags')
+  assert(cardPickReady(waitSearch, ['40']), 'search up-to')
+  assert(!cardPickReady(waitSearch, ['40', '41', '42']), 'search over')
+}
+
+const waitReveal = parseWaitingFor({
+  type: 'RevealChoice',
+  data: { player: 0, cards: [50], count: 1, optional: true },
+})
+assert(waitReveal?.kind === 'CardPick', 'parse RevealChoice')
+if (waitReveal?.kind === 'CardPick') {
+  assert(cardPickReady(waitReveal, []), 'reveal decline')
+}
+
+const waitDig = parseWaitingFor({
+  type: 'DigChoice',
+  data: { player: 0, selectable_cards: [60, 61], keep_count: 1, up_to: false },
+})
+assert(waitDig?.kind === 'CardPick' && waitDig.count === 1, 'parse DigChoice')
+
+const waitTrig = parseWaitingFor({
+  type: 'OrderTriggers',
+  data: {
+    player: 0,
+    triggers: [
+      { source_id: 1, source_name: 'A', description: 'draw' },
+      { source_id: 2, source_name: 'B', description: 'damage' },
+    ],
+  },
+})
+assert(waitTrig?.kind === 'OrderTriggers', 'parse OrderTriggers')
+if (waitTrig?.kind === 'OrderTriggers') {
+  assert(waitTrig.triggers.length === 2, 'triggers')
+  assert(buildOrderTriggers([1, 0]).type === 'OrderTriggers', 'OrderTriggers action')
+}
+
+const waitRep = parseWaitingFor({
+  type: 'ReplacementChoice',
+  data: {
+    player: 0,
+    candidate_count: 2,
+    candidates: [
+      { source_id: 8, source_name: 'Torpor Orb', description: 'skip ETB' },
+      { source_id: 9, source_name: 'Doubling Season', description: 'double' },
+    ],
+    kind: { type: 'Order' },
+    last_applied_decides: false,
+    remember_identity: { type: 'SomeTag' },
+  },
+})
+assert(waitRep?.kind === 'ReplacementChoice', 'parse ReplacementChoice')
+if (waitRep?.kind === 'ReplacementChoice') {
+  assert(isReplacementOrderMode(waitRep), 'replacement order mode')
+  assert(waitRep.canRemember, 'remember flag')
+  assert(buildChooseReplacement(0).type === 'ChooseReplacement', 'ChooseReplacement')
+  assert(
+    buildChooseReplacementAndRemember({ type: 'Order', data: { order: [1, 0] } }).type ===
+      'ChooseReplacementAndRemember',
+    'ChooseReplacementAndRemember',
+  )
+}
+
+const waitPay = parseWaitingFor({
+  type: 'PayAmountChoice',
+  data: {
+    player: 0,
+    min: 1,
+    max: 4,
+    source_id: 99,
+    resource: { type: 'Energy' },
+  },
+})
+assert(waitPay?.kind === 'PayAmountChoice', 'parse PayAmountChoice')
+if (waitPay?.kind === 'PayAmountChoice') {
+  assert(waitPay.resourceType === 'Energy', 'resource')
+  assert(payAmountInRange(waitPay, 2), 'pay ok')
+  assert(!payAmountInRange(waitPay, 0), 'pay low')
+  assert(buildSubmitPayAmount(3).type === 'SubmitPayAmount', 'SubmitPayAmount')
+}
+
+const stopsScry = derivedEngineStops(waitScry, 'main1')
+assert(stopsScry.has('main1'), 'rail stop scry')
+const stopsSearch = derivedEngineStops(waitSearch, 'main1')
+assert(stopsSearch.has('main1'), 'rail stop search')
+
+assert(viewPool.objectNames != null, 'objectNames present')
 
 console.log('phaseStateView.selftest + engineInteraction: ok')

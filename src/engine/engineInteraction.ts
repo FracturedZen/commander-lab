@@ -119,6 +119,101 @@ export type WaitingAssistPayment = {
   chosen?: number
 }
 
+export type LibraryBipartKind = 'ScryChoice' | 'SurveilChoice'
+
+/** Scry / Surveil: SelectCards carries ordered keep-on-top; remainder → bottom / GY. */
+export type WaitingLibraryBipart = {
+  kind: 'LibraryBipart'
+  type: LibraryBipartKind
+  player: number
+  cards: string[]
+}
+
+export type ReorderCardsKind =
+  | 'RippleBottomOrder'
+  | 'RevealUntilBottomOrder'
+  | 'DigRestSplitChoice'
+  | 'ArrangePlanarDeckTopChoice'
+
+/**
+ * Full-permutation SelectCards kinds.
+ * DigRestSplit: leading `topCount` → library top; rest → bottom.
+ * ArrangePlanar: keep exactly `exactKeepCount` on top (subset order), rest bottom.
+ */
+export type WaitingReorderCards = {
+  kind: 'ReorderCards'
+  type: ReorderCardsKind
+  player: number
+  cards: string[]
+  /** DigRestSplitChoice.top_count — first N of submitted order go on top. */
+  topCount?: number
+  /** DigRestSplit scope OrderOnly — may not cross the top/bottom boundary. */
+  orderOnly?: boolean
+  /** ArrangePlanarDeckTopChoice.keep_on_top — exact keep subset size. */
+  exactKeepCount?: number
+}
+
+export type CardPickKind =
+  | 'SearchChoice'
+  | 'SearchPartitionChoice'
+  | 'DigChoice'
+  | 'RevealChoice'
+  | 'ChooseFromZoneChoice'
+
+/** Subset SelectCards: search / dig / reveal / zone / partition. */
+export type WaitingCardPick = {
+  kind: 'CardPick'
+  type: CardPickKind
+  player: number
+  cards: string[]
+  count: number
+  upTo: boolean
+  /** RevealChoice: empty SelectCards declines. */
+  optional?: boolean
+  /** SearchChoice ordering_hint === OrderedToLibraryTop — selection order matters. */
+  ordered?: boolean
+}
+
+export type TriggerSummary = {
+  sourceId: string
+  sourceName: string
+  description: string
+}
+
+export type WaitingOrderTriggers = {
+  kind: 'OrderTriggers'
+  player: number
+  triggers: TriggerSummary[]
+}
+
+export type ReplacementCandidate = {
+  sourceId: string
+  sourceName: string
+  description: string
+}
+
+export type WaitingReplacement = {
+  kind: 'ReplacementChoice'
+  player: number
+  candidateCount: number
+  candidates: ReplacementCandidate[]
+  /** Phase ReplacementChoiceKind.type — Order | OptionalBranch | SearchFoundDestination */
+  kindType: string
+  lastAppliedDecides: boolean
+  /** True when remember_identity is present (ChooseReplacementAndRemember available). */
+  canRemember: boolean
+}
+
+export type WaitingPayAmount = {
+  kind: 'PayAmountChoice'
+  player: number
+  min: number
+  max: number
+  sourceId?: string
+  /** Phase PayableResource.type string (Energy, ManaGeneric, …). */
+  resourceType: string
+}
+
 export type WaitingOther = {
   kind: 'Other'
   type: string
@@ -138,6 +233,12 @@ export type WaitingDetail =
   | WaitingDiscard
   | WaitingModeChoice
   | WaitingEffectZone
+  | WaitingLibraryBipart
+  | WaitingReorderCards
+  | WaitingCardPick
+  | WaitingOrderTriggers
+  | WaitingReplacement
+  | WaitingPayAmount
   | WaitingOther
   | null
 
@@ -426,6 +527,170 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
       minCount,
       upTo: Boolean(data.up_to ?? data.upTo),
       zone: typeof data.zone === 'string' ? data.zone : undefined,
+    }
+  }
+
+  if (type === 'ScryChoice' || type === 'SurveilChoice') {
+    return {
+      kind: 'LibraryBipart',
+      type,
+      player,
+      cards: numIds(data.cards ?? []),
+    }
+  }
+
+  if (
+    type === 'RippleBottomOrder' ||
+    type === 'RevealUntilBottomOrder' ||
+    type === 'DigRestSplitChoice' ||
+    type === 'ArrangePlanarDeckTopChoice'
+  ) {
+    const cards = numIds(data.cards ?? [])
+    const scope = asRecord(data.scope)
+    const scopeType = typeof scope?.type === 'string' ? scope.type : typeof data.scope === 'string' ? data.scope : null
+    const topCount =
+      typeof data.top_count === 'number'
+        ? data.top_count
+        : typeof data.topCount === 'number'
+          ? data.topCount
+          : undefined
+    const exactKeepCount =
+      typeof data.keep_on_top === 'number'
+        ? data.keep_on_top
+        : typeof data.keepOnTop === 'number'
+          ? data.keepOnTop
+          : undefined
+    return {
+      kind: 'ReorderCards',
+      type,
+      player,
+      cards,
+      topCount,
+      orderOnly: scopeType === 'OrderOnly' || scopeType === 'order_only',
+      exactKeepCount,
+    }
+  }
+
+  if (
+    type === 'SearchChoice' ||
+    type === 'SearchPartitionChoice' ||
+    type === 'DigChoice' ||
+    type === 'RevealChoice' ||
+    type === 'ChooseFromZoneChoice'
+  ) {
+    const cards =
+      type === 'DigChoice'
+        ? numIds(data.selectable_cards ?? data.selectableCards ?? data.cards ?? [])
+        : numIds(data.cards ?? [])
+    let count = 1
+    if (typeof data.count === 'number') count = data.count
+    else if (typeof data.primary_count === 'number') count = data.primary_count
+    else if (typeof data.primaryCount === 'number') count = data.primaryCount
+    else if (typeof data.keep_count === 'number') count = data.keep_count
+    else if (typeof data.keepCount === 'number') count = data.keepCount
+    const ordering = asRecord(data.ordering_hint) ?? asRecord(data.orderingHint)
+    const orderingType =
+      typeof ordering?.type === 'string'
+        ? ordering.type
+        : typeof data.ordering_hint === 'string'
+          ? data.ordering_hint
+          : typeof data.orderingHint === 'string'
+            ? data.orderingHint
+            : null
+    const upTo =
+      Boolean(data.up_to ?? data.upTo) ||
+      Boolean(data.allows_partial_find ?? data.allowsPartialFind) ||
+      (type === 'DigChoice' && Boolean(data.up_to ?? data.upTo))
+    return {
+      kind: 'CardPick',
+      type,
+      player,
+      cards,
+      count,
+      upTo,
+      optional: type === 'RevealChoice' ? Boolean(data.optional) : undefined,
+      ordered: orderingType === 'OrderedToLibraryTop',
+    }
+  }
+
+  if (type === 'OrderTriggers') {
+    const raw = Array.isArray(data.triggers) ? data.triggers : []
+    const triggers: TriggerSummary[] = []
+    for (const t of raw) {
+      const tr = asRecord(t)
+      if (!tr) continue
+      const sourceId = idStr(tr.source_id ?? tr.sourceId) ?? '?'
+      triggers.push({
+        sourceId,
+        sourceName: typeof tr.source_name === 'string' ? tr.source_name : typeof tr.sourceName === 'string' ? tr.sourceName : '',
+        description: typeof tr.description === 'string' ? tr.description : '',
+      })
+    }
+    return { kind: 'OrderTriggers', player, triggers }
+  }
+
+  if (type === 'ReplacementChoice') {
+    const candidateCount =
+      typeof data.candidate_count === 'number'
+        ? data.candidate_count
+        : typeof data.candidateCount === 'number'
+          ? data.candidateCount
+          : Array.isArray(data.candidates)
+            ? data.candidates.length
+            : 0
+    const raw = Array.isArray(data.candidates) ? data.candidates : []
+    const candidates: ReplacementCandidate[] = []
+    for (const c of raw) {
+      const cr = asRecord(c)
+      if (!cr) continue
+      candidates.push({
+        sourceId: idStr(cr.source_id ?? cr.sourceId) ?? '?',
+        sourceName:
+          typeof cr.source_name === 'string'
+            ? cr.source_name
+            : typeof cr.sourceName === 'string'
+              ? cr.sourceName
+              : '',
+        description: typeof cr.description === 'string' ? cr.description : '',
+      })
+    }
+    const kindRaw = asRecord(data.kind)
+    const kindType =
+      typeof kindRaw?.type === 'string'
+        ? kindRaw.type
+        : typeof data.kind === 'string'
+          ? data.kind
+          : 'Order'
+    return {
+      kind: 'ReplacementChoice',
+      player,
+      candidateCount,
+      candidates,
+      kindType,
+      lastAppliedDecides: Boolean(
+        data.last_applied_decides ?? data.lastAppliedDecides,
+      ),
+      canRemember: data.remember_identity !== undefined || data.rememberIdentity !== undefined,
+    }
+  }
+
+  if (type === 'PayAmountChoice') {
+    const min = typeof data.min === 'number' ? data.min : 0
+    const max = typeof data.max === 'number' ? data.max : min
+    const resource = asRecord(data.resource)
+    const resourceType =
+      typeof resource?.type === 'string'
+        ? resource.type
+        : typeof data.resource === 'string'
+          ? data.resource
+          : 'Energy'
+    return {
+      kind: 'PayAmountChoice',
+      player: typeof data.player === 'number' ? data.player : player,
+      min,
+      max,
+      sourceId: idStr(data.source_id ?? data.sourceId) ?? undefined,
+      resourceType,
     }
   }
 
@@ -762,6 +1027,12 @@ export function derivedEngineStops(
     case 'Discard':
     case 'ModeChoice':
     case 'EffectZoneChoice':
+    case 'LibraryBipart':
+    case 'ReorderCards':
+    case 'CardPick':
+    case 'OrderTriggers':
+    case 'ReplacementChoice':
+    case 'PayAmountChoice':
       stops.add(seg)
       break
     case 'Other':
@@ -814,3 +1085,96 @@ export function summarizeManaSourceOption(selection: unknown, index: number): st
   if (penType && penType !== 'None') bits.push(penType)
   return bits.join(' · ')
 }
+
+export function buildOrderTriggers(order: number[]): PhaseGameAction {
+  return { type: 'OrderTriggers', data: { order } }
+}
+
+export function buildChooseReplacement(index: number): PhaseGameAction {
+  return { type: 'ChooseReplacement', data: { index } }
+}
+
+export function buildChooseReplacementAndRemember(
+  choice:
+    | { type: 'Order'; data: { order: number[] } }
+    | { type: 'Optional'; data: { index: number } },
+): PhaseGameAction {
+  return { type: 'ChooseReplacementAndRemember', data: { choice } }
+}
+
+export function buildSubmitPayAmount(amount: number): PhaseGameAction {
+  return { type: 'SubmitPayAmount', data: { amount } }
+}
+
+/** Scry/Surveil: ordered keep-on-top ids (rest implied by Phase). */
+export function libraryBipartReady(
+  detail: WaitingLibraryBipart,
+  keepOrdered: string[],
+): boolean {
+  const set = new Set(detail.cards)
+  if (keepOrdered.length > detail.cards.length) return false
+  const seen = new Set<string>()
+  for (const id of keepOrdered) {
+    if (!set.has(id) || seen.has(id)) return false
+    seen.add(id)
+  }
+  return true
+}
+
+/** Full permutation (Ripple/RevealUntil/DigRest) or exact-keep ArrangePlanar. */
+export function reorderCardsReady(
+  detail: WaitingReorderCards,
+  ordered: string[],
+): boolean {
+  if (detail.type === 'ArrangePlanarDeckTopChoice') {
+    const keep = detail.exactKeepCount ?? 0
+    if (ordered.length !== keep) return false
+    const set = new Set(detail.cards)
+    const seen = new Set<string>()
+    for (const id of ordered) {
+      if (!set.has(id) || seen.has(id)) return false
+      seen.add(id)
+    }
+    return true
+  }
+  if (ordered.length !== detail.cards.length) return false
+  const set = new Set(detail.cards)
+  const seen = new Set<string>()
+  for (const id of ordered) {
+    if (!set.has(id) || seen.has(id)) return false
+    seen.add(id)
+  }
+  if (detail.orderOnly && detail.topCount != null) {
+    const top = new Set(detail.cards.slice(0, detail.topCount))
+    for (let i = 0; i < detail.topCount; i++) {
+      if (!top.has(ordered[i]!)) return false
+    }
+  }
+  return true
+}
+
+export function cardPickReady(
+  detail: WaitingCardPick,
+  selected: string[],
+): boolean {
+  if (detail.optional && selected.length === 0) return true
+  if (detail.upTo) return selected.length <= detail.count
+  return selected.length === detail.count
+}
+
+export function payAmountInRange(
+  detail: WaitingPayAmount,
+  value: number,
+): boolean {
+  return (
+    Number.isFinite(value) &&
+    value >= detail.min &&
+    value <= detail.max &&
+    detail.min <= detail.max
+  )
+}
+
+export function isReplacementOrderMode(detail: WaitingReplacement): boolean {
+  return detail.kindType === 'Order' && detail.candidateCount > 1
+}
+

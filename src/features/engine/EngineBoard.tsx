@@ -29,6 +29,10 @@ import {
   buildSpendPoolMana,
   buildSubmitPhyrexianChoices,
   buildUnspendPoolMana,
+  buildOrderTriggers,
+  buildChooseReplacement,
+  buildChooseReplacementAndRemember,
+  buildSubmitPayAmount,
   chooseXInRange,
   defaultPhyrexianChoices,
   derivedEngineStops,
@@ -46,6 +50,11 @@ import {
   pickManaTapAction,
   pickUntargetedCast,
   summarizeManaSourceOption,
+  libraryBipartReady,
+  reorderCardsReady,
+  cardPickReady,
+  payAmountInRange,
+  isReplacementOrderMode,
   type CastPaymentModeType,
   type WaitingAssistChoosePlayer,
   type WaitingAssistPayment,
@@ -59,6 +68,12 @@ import {
   type WaitingManaSourceSelection,
   type WaitingModeChoice,
   type WaitingPhyrexian,
+  type WaitingLibraryBipart,
+  type WaitingReorderCards,
+  type WaitingCardPick,
+  type WaitingOrderTriggers,
+  type WaitingReplacement,
+  type WaitingPayAmount,
 } from '@/engine/engineInteraction'
 
 type Props = {
@@ -109,6 +124,29 @@ type UiMode =
   | { kind: 'discard'; detail: WaitingDiscard; selected: string[] }
   | { kind: 'modeChoice'; detail: WaitingModeChoice; selected: number[] }
   | { kind: 'effectZone'; detail: WaitingEffectZone; selected: string[] }
+  | {
+      kind: 'libraryBipart'
+      detail: WaitingLibraryBipart
+      /** Current display order of looked-at cards. */
+      order: string[]
+      /** Cards marked rest (bottom / graveyard). */
+      rest: string[]
+    }
+  | {
+      kind: 'reorderCards'
+      detail: WaitingReorderCards
+      order: string[]
+    }
+  | { kind: 'cardPick'; detail: WaitingCardPick; selected: string[] }
+  | { kind: 'orderTriggers'; detail: WaitingOrderTriggers; order: number[] }
+  | {
+      kind: 'replacement'
+      detail: WaitingReplacement
+      /** Permutation of candidate indices (Order mode). */
+      order: number[]
+      remember: boolean
+    }
+  | { kind: 'payAmount'; detail: WaitingPayAmount; value: number }
 
 function LifeBadge({
   life,
@@ -275,6 +313,55 @@ export function EngineBoard({
       setPicker(null)
       return
     }
+    if (w?.kind === 'LibraryBipart' && w.player === 0) {
+      setMode({
+        kind: 'libraryBipart',
+        detail: w,
+        order: [...w.cards],
+        rest: [],
+      })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'ReorderCards' && w.player === 0) {
+      const initial =
+        w.type === 'ArrangePlanarDeckTopChoice'
+          ? w.cards.slice(0, w.exactKeepCount ?? 0)
+          : [...w.cards]
+      setMode({ kind: 'reorderCards', detail: w, order: initial })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'CardPick' && w.player === 0) {
+      setMode({ kind: 'cardPick', detail: w, selected: [] })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'OrderTriggers' && w.player === 0) {
+      setMode({
+        kind: 'orderTriggers',
+        detail: w,
+        order: w.triggers.map((_, i) => i),
+      })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'ReplacementChoice' && w.player === 0) {
+      const n = Math.max(w.candidateCount, w.candidates.length)
+      setMode({
+        kind: 'replacement',
+        detail: w,
+        order: Array.from({ length: n }, (_, i) => i),
+        remember: false,
+      })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'PayAmountChoice') {
+      setMode({ kind: 'payAmount', detail: w, value: w.min })
+      setPicker(null)
+      return
+    }
     setMode((m) => {
       if (
         m.kind === 'attackers' ||
@@ -287,7 +374,13 @@ export function EngineBoard({
         m.kind === 'assistPay' ||
         m.kind === 'discard' ||
         m.kind === 'modeChoice' ||
-        m.kind === 'effectZone'
+        m.kind === 'effectZone' ||
+        m.kind === 'libraryBipart' ||
+        m.kind === 'reorderCards' ||
+        m.kind === 'cardPick' ||
+        m.kind === 'orderTriggers' ||
+        m.kind === 'replacement' ||
+        m.kind === 'payAmount'
       ) {
         return { kind: 'idle' }
       }
@@ -324,6 +417,9 @@ export function EngineBoard({
   const choiceGlow = useMemo(() => {
     if (mode.kind === 'discard') return new Set(mode.detail.cards)
     if (mode.kind === 'effectZone') return new Set(mode.detail.cards)
+    if (mode.kind === 'libraryBipart') return new Set(mode.detail.cards)
+    if (mode.kind === 'reorderCards') return new Set(mode.detail.cards)
+    if (mode.kind === 'cardPick') return new Set(mode.detail.cards)
     if (
       mode.kind === 'manaPay' ||
       mode.kind === 'manaSource' ||
@@ -346,8 +442,14 @@ export function EngineBoard({
       if (mode.pendingBlocker) s.add(mode.pendingBlocker)
       return s
     }
-    if (mode.kind === 'discard' || mode.kind === 'effectZone') {
+    if (mode.kind === 'discard' || mode.kind === 'effectZone' || mode.kind === 'cardPick') {
       return new Set(mode.selected)
+    }
+    if (mode.kind === 'libraryBipart') {
+      return new Set(mode.order.filter((id) => !mode.rest.includes(id)))
+    }
+    if (mode.kind === 'reorderCards') {
+      return new Set(mode.order)
     }
     return new Set<string>()
   }, [mode])
@@ -383,7 +485,13 @@ export function EngineBoard({
       }
       return { highlighted: false, glow: 'legal', selected: false }
     }
-    if (mode.kind === 'discard' || mode.kind === 'effectZone') {
+    if (
+      mode.kind === 'discard' ||
+      mode.kind === 'effectZone' ||
+      mode.kind === 'cardPick' ||
+      mode.kind === 'libraryBipart' ||
+      mode.kind === 'reorderCards'
+    ) {
       if (choiceGlow.has(objectId) || selectedIds.has(objectId)) {
         return {
           highlighted: true,
@@ -551,7 +659,7 @@ export function EngineBoard({
       return
     }
 
-    if (mode.kind === 'discard' || mode.kind === 'effectZone') {
+    if (mode.kind === 'discard' || mode.kind === 'effectZone' || mode.kind === 'cardPick') {
       if (!mode.detail.cards.includes(card.objectId)) {
         setInspect(card)
         return
@@ -561,20 +669,49 @@ export function EngineBoard({
         : [...mode.selected, card.objectId]
       // Cap exact-count selections
       if (
-        !mode.detail.upTo &&
-        selected.length > mode.detail.count &&
-        !mode.selected.includes(card.objectId)
-      ) {
-        return
-      }
-      if (
-        mode.detail.upTo &&
         selected.length > mode.detail.count &&
         !mode.selected.includes(card.objectId)
       ) {
         return
       }
       setMode({ ...mode, selected })
+      return
+    }
+
+    if (mode.kind === 'libraryBipart') {
+      if (!mode.detail.cards.includes(card.objectId)) {
+        setInspect(card)
+        return
+      }
+      // Toggle rest (bottom / GY) membership
+      const inRest = mode.rest.includes(card.objectId)
+      setMode({
+        ...mode,
+        rest: inRest
+          ? mode.rest.filter((id) => id !== card.objectId)
+          : [...mode.rest, card.objectId],
+      })
+      return
+    }
+
+    if (mode.kind === 'reorderCards') {
+      if (!mode.detail.cards.includes(card.objectId)) {
+        setInspect(card)
+        return
+      }
+      if (mode.detail.type === 'ArrangePlanarDeckTopChoice') {
+        const keep = mode.detail.exactKeepCount ?? 0
+        if (mode.order.includes(card.objectId)) {
+          setMode({
+            ...mode,
+            order: mode.order.filter((id) => id !== card.objectId),
+          })
+        } else if (mode.order.length < keep) {
+          setMode({ ...mode, order: [...mode.order, card.objectId] })
+        }
+        return
+      }
+      setInspect(card)
       return
     }
 
@@ -682,6 +819,109 @@ export function EngineBoard({
     if (!modeChoiceReady(mode.detail, mode.selected)) return
     setMode({ kind: 'idle' })
     onSubmit(buildSelectModes(mode.selected))
+  }
+
+  function objectLabel(id: string): string {
+    return (
+      view.objectNames?.[id] ||
+      you?.battlefield.find((c) => c.objectId === id)?.card.name ||
+      you?.hand.find((c) => c.objectId === id)?.card.name ||
+      opp?.battlefield.find((c) => c.objectId === id)?.card.name ||
+      `#${id}`
+    )
+  }
+
+  function moveInOrder(ids: string[], index: number, dir: -1 | 1): string[] {
+    const j = index + dir
+    if (j < 0 || j >= ids.length) return ids
+    const next = [...ids]
+    const tmp = next[index]!
+    next[index] = next[j]!
+    next[j] = tmp
+    return next
+  }
+
+  function moveIndexOrder(order: number[], index: number, dir: -1 | 1): number[] {
+    const j = index + dir
+    if (j < 0 || j >= order.length) return order
+    const next = [...order]
+    const tmp = next[index]!
+    next[index] = next[j]!
+    next[j] = tmp
+    return next
+  }
+
+  function confirmLibraryBipart() {
+    if (mode.kind !== 'libraryBipart') return
+    const keep = mode.order.filter((id) => !mode.rest.includes(id))
+    if (!libraryBipartReady(mode.detail, keep)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildSelectCards(keep))
+  }
+
+  function confirmReorderCards() {
+    if (mode.kind !== 'reorderCards') return
+    if (!reorderCardsReady(mode.detail, mode.order)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildSelectCards(mode.order))
+  }
+
+  function confirmCardPick() {
+    if (mode.kind !== 'cardPick') return
+    if (!cardPickReady(mode.detail, mode.selected)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildSelectCards(mode.selected))
+  }
+
+  function confirmOrderTriggers() {
+    if (mode.kind !== 'orderTriggers') return
+    if (mode.order.length !== mode.detail.triggers.length) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildOrderTriggers(mode.order))
+  }
+
+  function confirmReplacement() {
+    if (mode.kind !== 'replacement') return
+    const d = mode.detail
+    if (isReplacementOrderMode(d)) {
+      if (mode.remember && d.canRemember) {
+        setMode({ kind: 'idle' })
+        onSubmit(
+          buildChooseReplacementAndRemember({
+            type: 'Order',
+            data: { order: mode.order },
+          }),
+        )
+        return
+      }
+      // Iterative: apply first in order; Phase may re-ask for the rest.
+      const first = mode.order[0]
+      if (first == null) return
+      setMode({ kind: 'idle' })
+      onSubmit(buildChooseReplacement(first))
+      return
+    }
+    // OptionalBranch / SearchFoundDestination / single candidate — pick first selected = order[0]
+    const idx = mode.order[0] ?? 0
+    if (mode.remember && d.canRemember) {
+      setMode({ kind: 'idle' })
+      onSubmit(
+        buildChooseReplacementAndRemember({
+          type: 'Optional',
+          data: { index: idx },
+        }),
+      )
+      return
+    }
+    setMode({ kind: 'idle' })
+    onSubmit(buildChooseReplacement(idx))
+  }
+
+  function confirmPayAmount() {
+    if (mode.kind !== 'payAmount') return
+    if (!payAmountInRange(mode.detail, mode.value)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildSubmitPayAmount(mode.value))
   }
 
   function runManaShortcuts() {
@@ -1222,8 +1462,505 @@ export function EngineBoard({
           Commit assist
         </button>
       </div>
+    ) : mode.kind === 'libraryBipart' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-cyan-400/40 bg-cyan-950/50 px-3 py-2 text-sm text-cyan-50">
+        <span>
+          {mode.detail.type === 'SurveilChoice' ? 'Surveil' : 'Scry'} · tap to send to{' '}
+          {mode.detail.type === 'SurveilChoice' ? 'graveyard' : 'bottom'} · reorder keep
+          on top
+        </span>
+        <div className="flex max-h-56 flex-col gap-1 overflow-auto">
+          {mode.order.map((id, index) => {
+            const isRest = mode.rest.includes(id)
+            return (
+              <div
+                key={id}
+                className={[
+                  'flex items-center gap-1 rounded border px-2 py-1 text-xs',
+                  isRest
+                    ? 'border-slate-600 bg-slate-900/70 text-slate-400 line-through'
+                    : 'border-cyan-700/60 bg-cyan-950/70',
+                ].join(' ')}
+              >
+                <button
+                  type="button"
+                  disabled={busy}
+                  className="min-w-0 flex-1 truncate text-left disabled:opacity-40"
+                  onClick={() => {
+                    setMode({
+                      ...mode,
+                      rest: isRest
+                        ? mode.rest.filter((x) => x !== id)
+                        : [...mode.rest, id],
+                    })
+                  }}
+                >
+                  {objectLabel(id)}
+                  {isRest
+                    ? mode.detail.type === 'SurveilChoice'
+                      ? ' → GY'
+                      : ' → bottom'
+                    : ' → top'}
+                </button>
+                {!isRest && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busy || index === 0}
+                      className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                      onClick={() =>
+                        setMode({
+                          ...mode,
+                          order: moveInOrder(mode.order, index, -1),
+                        })
+                      }
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || index === mode.order.length - 1}
+                      className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                      onClick={() =>
+                        setMode({
+                          ...mode,
+                          order: moveInOrder(mode.order, index, 1),
+                        })
+                      }
+                    >
+                      ↓
+                    </button>
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        <button
+          type="button"
+          disabled={
+            busy ||
+            !libraryBipartReady(
+              mode.detail,
+              mode.order.filter((id) => !mode.rest.includes(id)),
+            )
+          }
+          className="self-start rounded bg-cyan-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmLibraryBipart}
+        >
+          Confirm {mode.detail.type === 'SurveilChoice' ? 'surveil' : 'scry'}
+        </button>
+      </div>
+    ) : mode.kind === 'reorderCards' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-indigo-400/40 bg-indigo-950/50 px-3 py-2 text-sm text-indigo-50">
+        <span>
+          {mode.detail.type === 'RippleBottomOrder'
+            ? 'Order for library bottom'
+            : mode.detail.type === 'RevealUntilBottomOrder'
+              ? 'Order revealed cards (bottom)'
+              : mode.detail.type === 'DigRestSplitChoice'
+                ? `Split dig rest · top ${mode.detail.topCount ?? '?'}${
+                    mode.detail.orderOnly ? ' (order only)' : ''
+                  }`
+                : `Arrange planar top · keep ${mode.detail.exactKeepCount ?? 0}`}
+        </span>
+        {mode.detail.type === 'ArrangePlanarDeckTopChoice' && (
+          <div className="flex flex-wrap gap-1">
+            {mode.detail.cards.map((id) => {
+              const on = mode.order.includes(id)
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={busy}
+                  className={[
+                    'rounded border px-2 py-1 text-xs disabled:opacity-40',
+                    on
+                      ? 'border-indigo-400 bg-indigo-900/80'
+                      : 'border-indigo-800/60 bg-indigo-950/60',
+                  ].join(' ')}
+                  onClick={() => {
+                    const keep = mode.detail.exactKeepCount ?? 0
+                    if (on) {
+                      setMode({
+                        ...mode,
+                        order: mode.order.filter((x) => x !== id),
+                      })
+                    } else if (mode.order.length < keep) {
+                      setMode({ ...mode, order: [...mode.order, id] })
+                    }
+                  }}
+                >
+                  {objectLabel(id)}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        <div className="flex max-h-56 flex-col gap-1 overflow-auto">
+          {(mode.detail.type === 'ArrangePlanarDeckTopChoice'
+            ? mode.order
+            : mode.order
+          ).map((id, index) => (
+            <div
+              key={`${id}-${index}`}
+              className="flex items-center gap-1 rounded border border-indigo-700/60 bg-indigo-950/70 px-2 py-1 text-xs"
+            >
+              <span className="min-w-0 flex-1 truncate">
+                {index + 1}. {objectLabel(id)}
+                {mode.detail.type === 'DigRestSplitChoice' &&
+                mode.detail.topCount != null &&
+                index < mode.detail.topCount
+                  ? ' · top'
+                  : mode.detail.type === 'DigRestSplitChoice'
+                    ? ' · bottom'
+                    : ''}
+              </span>
+              <button
+                type="button"
+                disabled={busy || index === 0}
+                className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                onClick={() =>
+                  setMode({
+                    ...mode,
+                    order: moveInOrder(mode.order, index, -1),
+                  })
+                }
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                disabled={busy || index === mode.order.length - 1}
+                className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                onClick={() =>
+                  setMode({
+                    ...mode,
+                    order: moveInOrder(mode.order, index, 1),
+                  })
+                }
+              >
+                ↓
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          disabled={busy || !reorderCardsReady(mode.detail, mode.order)}
+          className="self-start rounded bg-indigo-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmReorderCards}
+        >
+          Confirm order
+        </button>
+      </div>
+    ) : mode.kind === 'cardPick' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-emerald-400/40 bg-emerald-950/50 px-3 py-2 text-sm text-emerald-50">
+        <span>
+          {mode.detail.type === 'SearchChoice'
+            ? 'Search'
+            : mode.detail.type === 'SearchPartitionChoice'
+              ? 'Search partition'
+              : mode.detail.type === 'DigChoice'
+                ? 'Dig'
+                : mode.detail.type === 'RevealChoice'
+                  ? 'Reveal'
+                  : 'Choose from zone'}
+          {' · '}
+          {mode.detail.optional
+            ? 'optional'
+            : mode.detail.upTo
+              ? `up to ${mode.detail.count}`
+              : mode.detail.count}
+          {mode.detail.ordered ? ' · order matters' : ''} · {mode.selected.length}{' '}
+          selected
+        </span>
+        <div className="flex max-h-56 flex-wrap gap-1 overflow-auto">
+          {mode.detail.cards.map((id) => {
+            const on = mode.selected.includes(id)
+            return (
+              <button
+                key={id}
+                type="button"
+                disabled={busy}
+                className={[
+                  'rounded border px-2 py-1 text-xs disabled:opacity-40',
+                  on
+                    ? 'border-emerald-400 bg-emerald-900/80'
+                    : 'border-emerald-800/60 bg-emerald-950/60',
+                ].join(' ')}
+                onClick={() => {
+                  if (on) {
+                    setMode({
+                      ...mode,
+                      selected: mode.selected.filter((x) => x !== id),
+                    })
+                    return
+                  }
+                  if (mode.selected.length >= mode.detail.count) return
+                  setMode({ ...mode, selected: [...mode.selected, id] })
+                }}
+              >
+                {objectLabel(id)}
+              </button>
+            )
+          })}
+        </div>
+        {mode.detail.ordered && mode.selected.length > 1 && (
+          <div className="flex max-h-40 flex-col gap-1 overflow-auto">
+            {mode.selected.map((id, index) => (
+              <div
+                key={id}
+                className="flex items-center gap-1 rounded border border-emerald-700/50 bg-emerald-950/60 px-2 py-1 text-xs"
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  {index + 1}. {objectLabel(id)}
+                </span>
+                <button
+                  type="button"
+                  disabled={busy || index === 0}
+                  className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                  onClick={() =>
+                    setMode({
+                      ...mode,
+                      selected: moveInOrder(mode.selected, index, -1),
+                    })
+                  }
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || index === mode.selected.length - 1}
+                  className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                  onClick={() =>
+                    setMode({
+                      ...mode,
+                      selected: moveInOrder(mode.selected, index, 1),
+                    })
+                  }
+                >
+                  ↓
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy || !cardPickReady(mode.detail, mode.selected)}
+            className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+            onClick={confirmCardPick}
+          >
+            Confirm
+          </button>
+          {mode.detail.optional && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-slate-700 px-3 py-1 text-xs disabled:opacity-40"
+              onClick={() => {
+                setMode({ kind: 'idle' })
+                onSubmit(buildSelectCards([]))
+              }}
+            >
+              Decline
+            </button>
+          )}
+        </div>
+      </div>
+    ) : mode.kind === 'orderTriggers' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
+        <span>Order triggered abilities (top resolves first)</span>
+        <div className="flex max-h-56 flex-col gap-1 overflow-auto">
+          {mode.order.map((ti, index) => {
+            const t = mode.detail.triggers[ti]
+            return (
+              <div
+                key={`${ti}-${index}`}
+                className="flex items-center gap-1 rounded border border-orange-700/60 bg-orange-950/70 px-2 py-1 text-xs"
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  {index + 1}. {t?.sourceName || t?.sourceId || `trigger ${ti}`}
+                  {t?.description ? ` — ${t.description}` : ''}
+                </span>
+                <button
+                  type="button"
+                  disabled={busy || index === 0}
+                  className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                  onClick={() =>
+                    setMode({
+                      ...mode,
+                      order: moveIndexOrder(mode.order, index, -1),
+                    })
+                  }
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || index === mode.order.length - 1}
+                  className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                  onClick={() =>
+                    setMode({
+                      ...mode,
+                      order: moveIndexOrder(mode.order, index, 1),
+                    })
+                  }
+                >
+                  ↓
+                </button>
+              </div>
+            )
+          })}
+        </div>
+        <button
+          type="button"
+          disabled={busy || mode.order.length !== mode.detail.triggers.length}
+          className="self-start rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmOrderTriggers}
+        >
+          Confirm order
+        </button>
+      </div>
+    ) : mode.kind === 'replacement' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-lime-400/40 bg-lime-950/50 px-3 py-2 text-sm text-lime-50">
+        <span>
+          Replacement ({mode.detail.kindType}
+          {mode.detail.lastAppliedDecides ? ' · last decides' : ''}) ·{' '}
+          {mode.detail.candidateCount} candidate
+          {mode.detail.candidateCount === 1 ? '' : 's'}
+        </span>
+        {isReplacementOrderMode(mode.detail) ? (
+          <div className="flex max-h-56 flex-col gap-1 overflow-auto">
+            {mode.order.map((ci, index) => {
+              const c = mode.detail.candidates[ci]
+              return (
+                <div
+                  key={`${ci}-${index}`}
+                  className="flex items-center gap-1 rounded border border-lime-700/60 bg-lime-950/70 px-2 py-1 text-xs"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {index + 1}.{' '}
+                    {c?.sourceName || c?.description || `candidate ${ci}`}
+                    {c?.description && c.sourceName
+                      ? ` — ${c.description}`
+                      : ''}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={busy || index === 0}
+                    className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                    onClick={() =>
+                      setMode({
+                        ...mode,
+                        order: moveIndexOrder(mode.order, index, -1),
+                      })
+                    }
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || index === mode.order.length - 1}
+                    className="rounded bg-slate-700 px-1.5 py-0.5 disabled:opacity-30"
+                    onClick={() =>
+                      setMode({
+                        ...mode,
+                        order: moveIndexOrder(mode.order, index, 1),
+                      })
+                    }
+                  >
+                    ↓
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {Array.from(
+              { length: Math.max(mode.detail.candidateCount, mode.detail.candidates.length) },
+              (_, i) => {
+                const c = mode.detail.candidates[i]
+                const on = mode.order[0] === i
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    disabled={busy}
+                    className={[
+                      'rounded border px-2 py-1 text-xs disabled:opacity-40',
+                      on
+                        ? 'border-lime-400 bg-lime-900/80'
+                        : 'border-lime-800/60 bg-lime-950/60',
+                    ].join(' ')}
+                    onClick={() => setMode({ ...mode, order: [i] })}
+                  >
+                    {c?.sourceName || c?.description || `Option ${i + 1}`}
+                  </button>
+                )
+              },
+            )}
+          </div>
+        )}
+        {mode.detail.canRemember && (
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={mode.remember}
+              disabled={busy}
+              onChange={(e) =>
+                setMode({ ...mode, remember: e.target.checked })
+              }
+            />
+            Remember for identical events
+          </label>
+        )}
+        <button
+          type="button"
+          disabled={busy || mode.order.length === 0}
+          className="self-start rounded bg-lime-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmReplacement}
+        >
+          Confirm replacement
+        </button>
+      </div>
+    ) : mode.kind === 'payAmount' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-yellow-400/40 bg-yellow-950/50 px-3 py-2 text-sm text-yellow-50">
+        <span>
+          Pay {mode.detail.resourceType} ({mode.detail.min}
+          {mode.detail.max !== mode.detail.min ? `–${mode.detail.max}` : ''})
+          {mode.detail.sourceId
+            ? ` · ${objectLabel(mode.detail.sourceId)}`
+            : ''}
+        </span>
+        <input
+          type="number"
+          className="w-20 rounded border border-yellow-700 bg-yellow-950 px-2 py-1 text-sm text-white"
+          min={mode.detail.min}
+          max={mode.detail.max}
+          value={mode.value}
+          disabled={busy || mode.detail.min > mode.detail.max}
+          onChange={(e) => {
+            const n = Number(e.target.value)
+            if (!Number.isFinite(n)) return
+            setMode({ ...mode, value: n })
+          }}
+        />
+        <button
+          type="button"
+          disabled={busy || !payAmountInRange(mode.detail, mode.value)}
+          className="rounded bg-yellow-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmPayAmount}
+        >
+          Confirm amount
+        </button>
+      </div>
     ) : waitingDetail?.kind === 'MulliganDecision' &&
       (mulliganActs.keep || mulliganActs.mulligan) ? (
+
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-400/40 bg-violet-950/50 px-3 py-2 text-sm text-violet-50">
         <span>Opening hand — keep or mulligan?</span>
         {mulliganActs.keep && (
