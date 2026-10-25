@@ -134,6 +134,12 @@ import {
   buildChooseReplacement,
   buildChooseReplacementAndRemember,
   buildSubmitPayAmount,
+  buildAssignCombatDamage,
+  buildAssignBlockerDamage,
+  defaultCombatDamageSplit,
+  defaultBlockerDamageSplit,
+  combatDamageReady,
+  blockerDamageReady,
   defaultPhyrexianChoices,
   phyrexianChoicesPayload,
   chooseXInRange,
@@ -521,5 +527,118 @@ const stopsSearch = derivedEngineStops(waitSearch, 'main1')
 assert(stopsSearch.has('main1'), 'rail stop search')
 
 assert(viewPool.objectNames != null, 'objectNames present')
+
+// --- v0.6.6 stack / combat damage / poison / commander damage ---
+const waitAcd = parseWaitingFor({
+  type: 'AssignCombatDamage',
+  data: {
+    player: 0,
+    attacker_id: 70,
+    total_damage: 5,
+    blockers: [
+      { blocker_id: 71, lethal_minimum: 2 },
+      { blocker_id: 72, lethal_minimum: 1 },
+    ],
+    assignment_modes: ['Normal', 'AsThoughUnblocked'],
+    trample: 'Standard',
+    defending_player: 1,
+    attack_target: { type: 'Player', data: 1 },
+  },
+})
+assert(waitAcd?.kind === 'AssignCombatDamage', 'parse AssignCombatDamage')
+if (waitAcd?.kind === 'AssignCombatDamage') {
+  assert(waitAcd.attackerId === '70' && waitAcd.totalDamage === 5, 'acd fields')
+  assert(waitAcd.blockers.length === 2 && waitAcd.trample === 'Standard', 'acd blockers/tramp')
+  assert(waitAcd.assignmentModes.includes('AsThoughUnblocked'), 'acd modes')
+  const split = defaultCombatDamageSplit(waitAcd)
+  assert(split.amounts['71'] === 2 && split.amounts['72'] === 1, 'acd lethal default')
+  assert(split.trampleDamage === 2, 'acd tramp rest')
+  assert(combatDamageReady(waitAcd, 'Normal', split.amounts, split.trampleDamage, 0), 'acd ready')
+  const act = buildAssignCombatDamage('Normal', split.amounts, split.trampleDamage, 0)
+  assert(act.type === 'AssignCombatDamage', 'AssignCombatDamage action')
+  const asThough = buildAssignCombatDamage('AsThoughUnblocked', {}, 0, 0)
+  assert(
+    (asThough.data as { mode?: string }).mode === 'AsThoughUnblocked',
+    'as though mode',
+  )
+}
+const stopsAcd = derivedEngineStops(waitAcd, 'combat_damage')
+assert(stopsAcd.has('combat'), 'rail stop AssignCombatDamage')
+
+const waitAbd = parseWaitingFor({
+  type: 'AssignBlockerDamage',
+  data: { player: 0, blocker_id: 80, total_damage: 3, attackers: [81, 82] },
+})
+assert(waitAbd?.kind === 'AssignBlockerDamage', 'parse AssignBlockerDamage')
+if (waitAbd?.kind === 'AssignBlockerDamage') {
+  const amounts = defaultBlockerDamageSplit(waitAbd)
+  assert(amounts['81'] === 3 && amounts['82'] === 0, 'abd dump first')
+  assert(blockerDamageReady(waitAbd, amounts), 'abd ready')
+  assert(buildAssignBlockerDamage(amounts).type === 'AssignBlockerDamage', 'abd action')
+}
+
+const withStack = {
+  state: {
+    ...wrapped.state,
+    stack: [{ id: 100 }, { id: 101 }],
+    players: [
+      { id: 0, life: 40, library: [10], hand: [], graveyard: [], poison_counters: 2 },
+      { id: 1, life: 36, library: [20], hand: [], graveyard: [], poison_counters: 0 },
+    ],
+    objects: {
+      ...wrapped.state.objects,
+      '100': {
+        id: 100,
+        name: 'Lightning Bolt',
+        zone: 'Stack',
+        owner: 0,
+        controller: 0,
+        tapped: false,
+        card_types: { supertypes: [], core_types: ['Instant'], subtypes: [] },
+      },
+      '101': {
+        id: 101,
+        name: 'Counterspell',
+        zone: 'Stack',
+        owner: 1,
+        controller: 1,
+        tapped: false,
+        card_types: { supertypes: [], core_types: ['Instant'], subtypes: [] },
+      },
+    },
+  },
+  derived: {
+    stack_display_groups: [
+      { representative: 100, count: 1, member_ids: [100] },
+      { representative: 101, count: 1, member_ids: [101] },
+    ],
+    stack_entry_details: {
+      '100': {
+        source_name: 'Lightning Bolt',
+        kind_label: 'Instant',
+        controller: 0,
+        targets: [{ label: 'Player 1', target: { type: 'Player', data: 1 } }],
+      },
+      '101': {
+        source_name: 'Counterspell',
+        kind_label: 'Instant',
+        controller: 1,
+        targets: [{ label: 'Lightning Bolt', target: { type: 'StackObject', data: 100 } }],
+      },
+    },
+    commander_damage_by_attacker: {
+      '0': [{ victim: 1, commander: 4, damage: 6 }],
+    },
+  },
+}
+const viewStack = buildPhaseBoardView(withStack, { actions: [] })
+assert(viewStack.ok, 'stack view ok')
+assert(viewStack.stackGroups.length === 2, 'stack groups')
+assert(viewStack.stackGroups[1]!.isTop, 'top is last')
+assert(viewStack.stackGroups[0]!.name === 'Lightning Bolt', 'stack name')
+assert(viewStack.seats[0]!.poison === 2, 'poison')
+assert(viewStack.seats[1]!.commanderDamage.length === 1, 'cmd dmg')
+assert(viewStack.seats[1]!.commanderDamage[0]!.damage === 6, 'cmd dmg amt')
+assert(viewStack.stackCount === 2, 'stack count')
 
 console.log('phaseStateView.selftest + engineInteraction: ok')

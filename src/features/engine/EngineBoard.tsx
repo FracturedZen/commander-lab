@@ -24,6 +24,13 @@ import {
   buildDeclareBlockersAction,
   buildDeclareNoneAttackers,
   buildDeclareNoneBlockers,
+  buildAssignCombatDamage,
+  buildAssignBlockerDamage,
+  defaultCombatDamageSplit,
+  defaultBlockerDamageSplit,
+  combatDamageReady,
+  blockerDamageReady,
+  combatDamageAssignedTotal,
   buildSelectCards,
   buildSelectModes,
   buildSpendPoolMana,
@@ -61,6 +68,9 @@ import {
   type WaitingChooseX,
   type WaitingCombatAttackers,
   type WaitingCombatBlockers,
+  type WaitingAssignCombatDamage,
+  type WaitingAssignBlockerDamage,
+  type CombatDamageAssignmentMode,
   type WaitingDetail,
   type WaitingDiscard,
   type WaitingEffectZone,
@@ -109,6 +119,19 @@ type UiMode =
       detail: WaitingCombatBlockers
       pendingBlocker: string | null
       assignments: Array<[string, string]>
+    }
+  | {
+      kind: 'assignCombatDamage'
+      detail: WaitingAssignCombatDamage
+      mode: CombatDamageAssignmentMode
+      amounts: Record<string, number>
+      trampleDamage: number
+      controllerDamage: number
+    }
+  | {
+      kind: 'assignBlockerDamage'
+      detail: WaitingAssignBlockerDamage
+      amounts: Record<string, number>
     }
   | { kind: 'manaPay'; detail: WaitingManaPayment }
   | { kind: 'manaSource'; detail: WaitingManaSourceSelection }
@@ -170,6 +193,35 @@ function LifeBadge({
       ].join(' ')}
     >
       {life}
+    </div>
+  )
+}
+
+function SeatStatusBadges({
+  poison,
+  commanderDamage,
+}: {
+  poison: number
+  commanderDamage: Array<{ commanderName: string; damage: number }>
+}) {
+  if (poison <= 0 && commanderDamage.length === 0) return null
+  return (
+    <div className="flex max-w-[9rem] flex-col gap-0.5 text-[9px] leading-tight">
+      {poison > 0 && (
+        <span className="rounded bg-emerald-900/80 px-1.5 py-0.5 font-semibold text-lime-300">
+          Poison {poison}
+        </span>
+      )}
+      {commanderDamage.map((cd, i) => (
+        <span
+          key={i}
+          className="truncate rounded bg-rose-950/80 px-1.5 py-0.5 text-rose-200"
+          title={`${cd.commanderName}: ${cd.damage} commander damage`}
+        >
+          CMD {cd.damage}
+          <span className="text-rose-200/60"> · {cd.commanderName}</span>
+        </span>
+      ))}
     </div>
   )
 }
@@ -257,6 +309,28 @@ export function EngineBoard({
         detail: w,
         pendingBlocker: null,
         assignments: [],
+      })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'AssignCombatDamage' && w.player === 0) {
+      const split = defaultCombatDamageSplit(w)
+      setMode({
+        kind: 'assignCombatDamage',
+        detail: w,
+        mode: split.mode,
+        amounts: split.amounts,
+        trampleDamage: split.trampleDamage,
+        controllerDamage: split.controllerDamage,
+      })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'AssignBlockerDamage' && w.player === 0) {
+      setMode({
+        kind: 'assignBlockerDamage',
+        detail: w,
+        amounts: defaultBlockerDamageSplit(w),
       })
       setPicker(null)
       return
@@ -366,6 +440,8 @@ export function EngineBoard({
       if (
         m.kind === 'attackers' ||
         m.kind === 'blockers' ||
+        m.kind === 'assignCombatDamage' ||
+        m.kind === 'assignBlockerDamage' ||
         m.kind === 'manaPay' ||
         m.kind === 'manaSource' ||
         m.kind === 'phyrexian' ||
@@ -411,6 +487,16 @@ export function EngineBoard({
       }
       return new Set(mode.detail.validBlockerIds)
     }
+    if (mode.kind === 'assignCombatDamage') {
+      const s = new Set<string>([mode.detail.attackerId])
+      for (const b of mode.detail.blockers) s.add(b.blockerId)
+      return s
+    }
+    if (mode.kind === 'assignBlockerDamage') {
+      const s = new Set<string>([mode.detail.blockerId])
+      for (const a of mode.detail.attackers) s.add(a)
+      return s
+    }
     return new Set<string>()
   }, [mode])
 
@@ -440,6 +526,20 @@ export function EngineBoard({
         s.add(a)
       }
       if (mode.pendingBlocker) s.add(mode.pendingBlocker)
+      return s
+    }
+    if (mode.kind === 'assignCombatDamage') {
+      const s = new Set<string>([mode.detail.attackerId])
+      for (const [id, dmg] of Object.entries(mode.amounts)) {
+        if (dmg > 0) s.add(id)
+      }
+      return s
+    }
+    if (mode.kind === 'assignBlockerDamage') {
+      const s = new Set<string>([mode.detail.blockerId])
+      for (const [id, dmg] of Object.entries(mode.amounts)) {
+        if (dmg > 0) s.add(id)
+      }
       return s
     }
     if (mode.kind === 'discard' || mode.kind === 'effectZone' || mode.kind === 'cardPick') {
@@ -475,7 +575,12 @@ export function EngineBoard({
       }
       return { highlighted: false, glow: 'legal', selected: false }
     }
-    if (mode.kind === 'attackers' || mode.kind === 'blockers') {
+    if (
+      mode.kind === 'attackers' ||
+      mode.kind === 'blockers' ||
+      mode.kind === 'assignCombatDamage' ||
+      mode.kind === 'assignBlockerDamage'
+    ) {
       if (combatGlow.has(objectId) || selectedIds.has(objectId)) {
         return {
           highlighted: true,
@@ -613,6 +718,59 @@ export function EngineBoard({
       const assignments = mode.assignments.filter(([b]) => b !== mode.pendingBlocker)
       assignments.push([mode.pendingBlocker, card.objectId])
       setMode({ ...mode, pendingBlocker: null, assignments })
+      return
+    }
+
+    if (mode.kind === 'assignCombatDamage') {
+      if (mode.mode === 'AsThoughUnblocked') {
+        setInspect(card)
+        return
+      }
+      const slot = mode.detail.blockers.find((b) => b.blockerId === card.objectId)
+      if (!slot) {
+        setInspect(card)
+        return
+      }
+      const cur = mode.amounts[card.objectId] ?? 0
+      const assigned = combatDamageAssignedTotal(
+        mode.amounts,
+        mode.trampleDamage,
+        mode.controllerDamage,
+      )
+      if (assigned >= mode.detail.totalDamage) {
+        // Cycle: reset this slot to 0 when fully assigned
+        setMode({
+          ...mode,
+          amounts: { ...mode.amounts, [card.objectId]: 0 },
+        })
+        return
+      }
+      setMode({
+        ...mode,
+        amounts: { ...mode.amounts, [card.objectId]: cur + 1 },
+      })
+      return
+    }
+
+    if (mode.kind === 'assignBlockerDamage') {
+      if (!mode.detail.attackers.includes(card.objectId)) {
+        setInspect(card)
+        return
+      }
+      const cur = mode.amounts[card.objectId] ?? 0
+      let assigned = 0
+      for (const id of mode.detail.attackers) assigned += mode.amounts[id] ?? 0
+      if (assigned >= mode.detail.totalDamage) {
+        setMode({
+          ...mode,
+          amounts: { ...mode.amounts, [card.objectId]: 0 },
+        })
+        return
+      }
+      setMode({
+        ...mode,
+        amounts: { ...mode.amounts, [card.objectId]: cur + 1 },
+      })
       return
     }
 
@@ -798,6 +956,37 @@ export function EngineBoard({
         : buildDeclareBlockersAction(mode.assignments)
     setMode({ kind: 'idle' })
     onSubmit(action)
+  }
+
+  function confirmAssignCombatDamage() {
+    if (mode.kind !== 'assignCombatDamage') return
+    if (
+      !combatDamageReady(
+        mode.detail,
+        mode.mode,
+        mode.amounts,
+        mode.trampleDamage,
+        mode.controllerDamage,
+      )
+    ) {
+      return
+    }
+    setMode({ kind: 'idle' })
+    onSubmit(
+      buildAssignCombatDamage(
+        mode.mode,
+        mode.amounts,
+        mode.trampleDamage,
+        mode.controllerDamage,
+      ),
+    )
+  }
+
+  function confirmAssignBlockerDamage() {
+    if (mode.kind !== 'assignBlockerDamage') return
+    if (!blockerDamageReady(mode.detail, mode.amounts)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildAssignBlockerDamage(mode.amounts))
   }
 
   function confirmDiscard() {
@@ -1121,6 +1310,277 @@ export function EngineBoard({
             Cancel blocker
           </button>
         )}
+      </div>
+    ) : mode.kind === 'assignCombatDamage' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
+        <div className="flex flex-wrap items-center gap-2">
+          <span>
+            Assign combat damage from{' '}
+            <strong>{objectLabel(mode.detail.attackerId)}</strong> ·{' '}
+            {combatDamageAssignedTotal(
+              mode.amounts,
+              mode.trampleDamage,
+              mode.controllerDamage,
+            )}
+            /{mode.detail.totalDamage}
+            {mode.detail.trample ? ` · trample ${mode.detail.trample}` : ''}
+          </span>
+          <button
+            type="button"
+            disabled={
+              busy ||
+              !combatDamageReady(
+                mode.detail,
+                mode.mode,
+                mode.amounts,
+                mode.trampleDamage,
+                mode.controllerDamage,
+              )
+            }
+            className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white hover:bg-orange-500 disabled:opacity-40"
+            onClick={confirmAssignCombatDamage}
+          >
+            Confirm damage
+          </button>
+          <button
+            type="button"
+            className="rounded bg-slate-700 px-2 py-1 text-xs"
+            onClick={() => {
+              const split = defaultCombatDamageSplit(mode.detail)
+              setMode({
+                ...mode,
+                mode: 'Normal',
+                amounts: split.amounts,
+                trampleDamage: split.trampleDamage,
+                controllerDamage: split.controllerDamage,
+              })
+            }}
+          >
+            Reset
+          </button>
+        </div>
+        {mode.detail.assignmentModes.includes('AsThoughUnblocked') && (
+          <div className="flex flex-wrap gap-1">
+            {(['Normal', 'AsThoughUnblocked'] as CombatDamageAssignmentMode[])
+              .filter((m) => mode.detail.assignmentModes.includes(m))
+              .map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={[
+                    'rounded px-2 py-1 text-xs',
+                    mode.mode === m
+                      ? 'bg-orange-500 text-white'
+                      : 'bg-orange-900/70 hover:bg-orange-800',
+                  ].join(' ')}
+                  onClick={() => {
+                    if (m === 'AsThoughUnblocked') {
+                      setMode({
+                        ...mode,
+                        mode: m,
+                        amounts: {},
+                        trampleDamage: 0,
+                        controllerDamage: 0,
+                      })
+                    } else {
+                      const split = defaultCombatDamageSplit(mode.detail)
+                      setMode({
+                        ...mode,
+                        mode: m,
+                        amounts: split.amounts,
+                        trampleDamage: split.trampleDamage,
+                        controllerDamage: split.controllerDamage,
+                      })
+                    }
+                  }}
+                >
+                  {m === 'AsThoughUnblocked' ? 'As though unblocked' : 'Normal'}
+                </button>
+              ))}
+          </div>
+        )}
+        {mode.mode === 'Normal' && (
+          <div className="flex flex-col gap-1">
+            {mode.detail.blockers.map((slot) => (
+              <div
+                key={slot.blockerId}
+                className="flex flex-wrap items-center gap-2 text-xs"
+              >
+                <span className="min-w-[8rem] truncate">
+                  {objectLabel(slot.blockerId)}
+                  <span className="text-orange-200/50">
+                    {' '}
+                    (lethal {slot.lethalMinimum})
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="rounded bg-orange-900 px-2 py-0.5"
+                  onClick={() =>
+                    setMode({
+                      ...mode,
+                      amounts: {
+                        ...mode.amounts,
+                        [slot.blockerId]: Math.max(
+                          0,
+                          (mode.amounts[slot.blockerId] ?? 0) - 1,
+                        ),
+                      },
+                    })
+                  }
+                >
+                  −
+                </button>
+                <span className="w-6 text-center tabular-nums font-semibold">
+                  {mode.amounts[slot.blockerId] ?? 0}
+                </span>
+                <button
+                  type="button"
+                  className="rounded bg-orange-900 px-2 py-0.5"
+                  onClick={() =>
+                    setMode({
+                      ...mode,
+                      amounts: {
+                        ...mode.amounts,
+                        [slot.blockerId]: (mode.amounts[slot.blockerId] ?? 0) + 1,
+                      },
+                    })
+                  }
+                >
+                  +
+                </button>
+              </div>
+            ))}
+            {mode.detail.trample != null && (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="min-w-[8rem]">
+                  Trample → defender
+                  {mode.detail.trample === 'OverPlaneswalkers' && mode.detail.pwLoyalty != null
+                    ? ` (PW loyalty ${mode.detail.pwLoyalty})`
+                    : ''}
+                </span>
+                <button
+                  type="button"
+                  className="rounded bg-orange-900 px-2 py-0.5"
+                  onClick={() =>
+                    setMode({
+                      ...mode,
+                      trampleDamage: Math.max(0, mode.trampleDamage - 1),
+                    })
+                  }
+                >
+                  −
+                </button>
+                <span className="w-6 text-center tabular-nums font-semibold">
+                  {mode.trampleDamage}
+                </span>
+                <button
+                  type="button"
+                  className="rounded bg-orange-900 px-2 py-0.5"
+                  onClick={() =>
+                    setMode({ ...mode, trampleDamage: mode.trampleDamage + 1 })
+                  }
+                >
+                  +
+                </button>
+              </div>
+            )}
+            {mode.detail.trample === 'OverPlaneswalkers' &&
+              mode.detail.pwController != null && (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="min-w-[8rem]">
+                    Excess → P{mode.detail.pwController}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded bg-orange-900 px-2 py-0.5"
+                    onClick={() =>
+                      setMode({
+                        ...mode,
+                        controllerDamage: Math.max(0, mode.controllerDamage - 1),
+                      })
+                    }
+                  >
+                    −
+                  </button>
+                  <span className="w-6 text-center tabular-nums font-semibold">
+                    {mode.controllerDamage}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded bg-orange-900 px-2 py-0.5"
+                    onClick={() =>
+                      setMode({
+                        ...mode,
+                        controllerDamage: mode.controllerDamage + 1,
+                      })
+                    }
+                  >
+                    +
+                  </button>
+                </div>
+              )}
+          </div>
+        )}
+      </div>
+    ) : mode.kind === 'assignBlockerDamage' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
+        <div className="flex flex-wrap items-center gap-2">
+          <span>
+            Assign blocker damage from{' '}
+            <strong>{objectLabel(mode.detail.blockerId)}</strong> ·{' '}
+            {Object.values(mode.amounts).reduce((a, b) => a + b, 0)}/
+            {mode.detail.totalDamage}
+          </span>
+          <button
+            type="button"
+            disabled={busy || !blockerDamageReady(mode.detail, mode.amounts)}
+            className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+            onClick={confirmAssignBlockerDamage}
+          >
+            Confirm damage
+          </button>
+        </div>
+        <div className="flex flex-col gap-1">
+          {mode.detail.attackers.map((aid) => (
+            <div key={aid} className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="min-w-[8rem] truncate">{objectLabel(aid)}</span>
+              <button
+                type="button"
+                className="rounded bg-orange-900 px-2 py-0.5"
+                onClick={() =>
+                  setMode({
+                    ...mode,
+                    amounts: {
+                      ...mode.amounts,
+                      [aid]: Math.max(0, (mode.amounts[aid] ?? 0) - 1),
+                    },
+                  })
+                }
+              >
+                −
+              </button>
+              <span className="w-6 text-center tabular-nums font-semibold">
+                {mode.amounts[aid] ?? 0}
+              </span>
+              <button
+                type="button"
+                className="rounded bg-orange-900 px-2 py-0.5"
+                onClick={() =>
+                  setMode({
+                    ...mode,
+                    amounts: {
+                      ...mode.amounts,
+                      [aid]: (mode.amounts[aid] ?? 0) + 1,
+                    },
+                  })
+                }
+              >
+                +
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     ) : mode.kind === 'manaPay' ? (
       <div className="flex flex-col gap-2 rounded-lg border border-amber-400/40 bg-amber-950/50 px-3 py-2 text-sm text-amber-50">
@@ -2028,12 +2488,16 @@ export function EngineBoard({
         combatEntered={
           view.phase.startsWith('combat') ||
           waitingDetail?.kind === 'DeclareAttackers' ||
-          waitingDetail?.kind === 'DeclareBlockers'
+          waitingDetail?.kind === 'DeclareBlockers' ||
+          waitingDetail?.kind === 'AssignCombatDamage' ||
+          waitingDetail?.kind === 'AssignBlockerDamage'
         }
         attackersDeclared={
           view.phase === 'combat_blockers' ||
           view.phase === 'combat_damage' ||
-          waitingDetail?.kind === 'DeclareBlockers'
+          waitingDetail?.kind === 'DeclareBlockers' ||
+          waitingDetail?.kind === 'AssignCombatDamage' ||
+          waitingDetail?.kind === 'AssignBlockerDamage'
         }
         onPass={() => {
           if (passAction && (mode.kind === 'idle' || mode.kind === 'manaPay')) {
@@ -2061,12 +2525,18 @@ export function EngineBoard({
         <div className="relative flex min-h-[28rem] flex-col gap-2 p-2 sm:p-3">
           {opp && (
             <div className="flex flex-wrap items-center justify-center gap-3">
-              <div className="rounded-lg border border-white/10 bg-black/35 px-3 py-1 text-center text-[11px] text-emerald-100/80">
-                <div className="font-semibold">AI{opp.isEliminated ? ' ✕' : ''}</div>
-                <div className="text-lg font-bold tabular-nums text-white">{opp.life}</div>
-                <div className="text-[10px] text-emerald-200/50">
-                  H{opp.hand.length} · L{opp.libraryCount}
+              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/35 px-3 py-1 text-[11px] text-emerald-100/80">
+                <div className="text-center">
+                  <div className="font-semibold">AI{opp.isEliminated ? ' ✕' : ''}</div>
+                  <div className="text-lg font-bold tabular-nums text-white">{opp.life}</div>
+                  <div className="text-[10px] text-emerald-200/50">
+                    H{opp.hand.length} · L{opp.libraryCount}
+                  </div>
                 </div>
+                <SeatStatusBadges
+                  poison={opp.poison}
+                  commanderDamage={opp.commanderDamage}
+                />
               </div>
               {opp.hand.length > 0 && (
                 <div className="flex max-w-[12rem] flex-wrap justify-center gap-0.5">
@@ -2105,7 +2575,8 @@ export function EngineBoard({
                 Battlefield
               </span>
               <span className="text-[10px] tabular-nums text-emerald-100/35">
-                {you.nonLands.length} · {you.lands.length} lands · stack {view.stackCount}
+                {you.nonLands.length} · {you.lands.length} lands
+                {view.stackCount > 0 ? ` · stack ${view.stackCount}` : ''}
               </span>
             </div>
             {you.nonLands.length === 0 ? (
@@ -2142,6 +2613,10 @@ export function EngineBoard({
                 lost={you.isEliminated}
               />
               <div className="text-[9px] text-emerald-100/50">L{you.libraryCount}</div>
+              <SeatStatusBadges
+                poison={you.poison}
+                commanderDamage={you.commanderDamage}
+              />
             </div>
 
             <div className="flex min-h-[7.5rem] flex-wrap items-end justify-center gap-1 pb-1">
@@ -2171,6 +2646,51 @@ export function EngineBoard({
             </div>
           </div>
         </div>
+
+        {(view.stackGroups?.length ?? 0) > 0 && (
+          <div className="pointer-events-auto absolute right-3 top-3 z-20 flex max-h-[70%] w-[9.5rem] flex-col-reverse gap-1.5 overflow-y-auto rounded-xl border border-violet-400/35 bg-black/70 p-1.5 shadow-xl shadow-violet-950/40 backdrop-blur-sm">
+            <div className="px-1 pb-0.5 text-center text-[9px] font-semibold uppercase tracking-wider text-violet-200/70">
+              Stack · {view.stackCount}
+            </div>
+            {[...(view.stackGroups ?? [])].reverse().map((g) => (
+              <div
+                key={g.representativeId + '-' + g.memberIds.join(',')}
+                className={[
+                  'relative flex flex-col gap-0.5 rounded-lg border px-1.5 py-1',
+                  g.isTop
+                    ? 'border-violet-300 bg-violet-600/40 ring-2 ring-violet-300/70'
+                    : 'border-violet-500/30 bg-violet-950/50',
+                ].join(' ')}
+                title={[g.name, g.kindLabel, g.description, ...g.targetLabels]
+                  .filter(Boolean)
+                  .join(' · ')}
+              >
+                {g.chip ? (
+                  <div className="flex justify-center">{renderChip(g.chip, 'tiny')}</div>
+                ) : (
+                  <div className="truncate text-center text-[10px] font-semibold text-violet-50">
+                    {g.name}
+                  </div>
+                )}
+                <div className="truncate text-center text-[9px] text-violet-100/80">
+                  {g.kindLabel}
+                  {g.count > 1 ? ` ×${g.count}` : ''}
+                </div>
+                {g.isTop && (
+                  <div className="absolute -left-1 -top-1 rounded bg-violet-300 px-1 text-[8px] font-bold uppercase text-violet-950">
+                    Top
+                  </div>
+                )}
+                {g.targetLabels.length > 0 && (
+                  <div className="truncate text-center text-[8px] text-violet-200/55">
+                    → {g.targetLabels[0]}
+                    {g.targetLabels.length > 1 ? '…' : ''}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         <button
           type="button"

@@ -35,6 +35,12 @@ export type PhaseManaPip = {
   restrictions: string[]
 }
 
+export type PhaseCommanderDamageBadge = {
+  commanderId: string
+  commanderName: string
+  damage: number
+}
+
 export type PhaseSeatView = {
   id: number
   life: number
@@ -49,6 +55,26 @@ export type PhaseSeatView = {
   /** Exact Phase mana_pool.mana rows for this seat (empty if absent). */
   manaPool: PhaseManaPip[]
   isEliminated?: boolean
+  /** Phase player.poison_counters (CR 704.5c). */
+  poison: number
+  /** Commander damage this seat has received (from derived.commander_damage_by_attacker). */
+  commanderDamage: PhaseCommanderDamageBadge[]
+}
+
+/** One coalesced stack group from Phase derived.stack_display_groups. */
+export type PhaseStackGroupView = {
+  representativeId: string
+  count: number
+  memberIds: string[]
+  /** True for the last group in Phase stack order (resolves first). */
+  isTop: boolean
+  name: string
+  kindLabel: string
+  description?: string
+  controller?: number
+  targetLabels: string[]
+  /** Chip when the representative object is resolvable for art. */
+  chip?: PhaseObjectView
 }
 
 export type PhaseBoardView = {
@@ -65,6 +91,8 @@ export type PhaseBoardView = {
   gameOver: boolean
   seats: PhaseSeatView[]
   stackCount: number
+  /** Phase derived.stack_display_groups (+ entry details), bottom→top order. */
+  stackGroups: PhaseStackGroupView[]
   /** objectId → legal actions (stripped of interactionActionId) */
   actionsByObject: Record<string, PhaseGameAction[]>
   flatActions: PhaseGameAction[]
@@ -102,6 +130,8 @@ type RawPlayer = {
   hand?: Array<number | string>
   graveyard?: Array<number | string>
   is_eliminated?: boolean
+  poison_counters?: number
+  poisonCounters?: number
 }
 
 type RawState = {
@@ -365,6 +395,139 @@ function parsePinnedPoolUnits(state: RawState): number[] {
     .filter((n) => Number.isFinite(n))
 }
 
+function asRec(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === 'object' && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null
+}
+
+function parseCommanderDamageForSeats(
+  derived: unknown,
+  objectNames: Record<string, string>,
+  seatIds: number[],
+): Map<number, PhaseCommanderDamageBadge[]> {
+  const out = new Map<number, PhaseCommanderDamageBadge[]>()
+  for (const id of seatIds) out.set(id, [])
+  const d = asRec(derived)
+  if (!d) return out
+  const byAtk =
+    asRec(d.commander_damage_by_attacker) ??
+    asRec(d.commanderDamageByAttacker)
+  if (!byAtk) return out
+  for (const entries of Object.values(byAtk)) {
+    if (!Array.isArray(entries)) continue
+    for (const raw of entries) {
+      const e = asRec(raw)
+      if (!e) continue
+      const victim =
+        typeof e.victim === 'number'
+          ? e.victim
+          : typeof e.victim === 'string'
+            ? Number(e.victim)
+            : NaN
+      if (!Number.isFinite(victim) || !out.has(victim)) continue
+      const commanderId = String(e.commander ?? e.commander_id ?? e.commanderId ?? '?')
+      const damage = typeof e.damage === 'number' ? e.damage : 0
+      if (damage <= 0) continue
+      out.get(victim)!.push({
+        commanderId,
+        commanderName: objectNames[commanderId] || `Commander #${commanderId}`,
+        damage,
+      })
+    }
+  }
+  return out
+}
+
+function parseStackGroups(
+  state: RawState,
+  objects: Record<string, RawObj>,
+  objectNames: Record<string, string>,
+): PhaseStackGroupView[] {
+  const derived = asRec(state.derived)
+  const groupsRaw =
+    (derived && Array.isArray(derived.stack_display_groups) && derived.stack_display_groups) ||
+    (derived && Array.isArray(derived.stackDisplayGroups) && derived.stackDisplayGroups) ||
+    null
+  const detailsRaw =
+    asRec(derived?.stack_entry_details) ??
+    asRec(derived?.stackEntryDetails) ??
+    {}
+
+  const fallbackIds: string[] = []
+  if (Array.isArray(state.stack)) {
+    for (const entry of state.stack) {
+      const er = asRec(entry)
+      if (!er) continue
+      const id = er.id ?? er.object_id ?? er.objectId
+      if (id != null) fallbackIds.push(String(id))
+    }
+  }
+
+  type GroupIn = { representativeId: string; count: number; memberIds: string[] }
+  const groups: GroupIn[] = []
+  if (groupsRaw && groupsRaw.length > 0) {
+    for (const g of groupsRaw) {
+      const gr = asRec(g)
+      if (!gr) continue
+      const rep = String(gr.representative ?? gr.representative_id ?? gr.representativeId ?? '')
+      if (!rep) continue
+      const members = Array.isArray(gr.member_ids)
+        ? gr.member_ids.map(String)
+        : Array.isArray(gr.memberIds)
+          ? gr.memberIds.map(String)
+          : [rep]
+      const count = typeof gr.count === 'number' ? gr.count : members.length || 1
+      groups.push({ representativeId: rep, count, memberIds: members })
+    }
+  } else {
+    for (const id of fallbackIds) {
+      groups.push({ representativeId: id, count: 1, memberIds: [id] })
+    }
+  }
+
+  return groups.map((g, index) => {
+    const detail = asRec(detailsRaw[g.representativeId])
+    const sourceName =
+      (detail && typeof detail.source_name === 'string' && detail.source_name) ||
+      (detail && typeof detail.sourceName === 'string' && detail.sourceName) ||
+      objectNames[g.representativeId] ||
+      ''
+    const kindLabel =
+      (detail && typeof detail.kind_label === 'string' && detail.kind_label) ||
+      (detail && typeof detail.kindLabel === 'string' && detail.kindLabel) ||
+      'Stack'
+    const description =
+      (detail && typeof detail.ability_description === 'string' && detail.ability_description) ||
+      (detail && typeof detail.abilityDescription === 'string' && detail.abilityDescription) ||
+      undefined
+    const controller =
+      detail && typeof detail.controller === 'number' ? detail.controller : undefined
+    const targetsRaw =
+      (detail && Array.isArray(detail.targets) && detail.targets) || []
+    const targetLabels: string[] = []
+    for (const t of targetsRaw) {
+      const tr = asRec(t)
+      if (tr && typeof tr.label === 'string') targetLabels.push(tr.label)
+    }
+    const obj = objects[g.representativeId]
+    const chip = obj ? toView(obj, 'hand') : undefined
+    const name = sourceName || chip?.card.name || `#${g.representativeId}`
+    return {
+      representativeId: g.representativeId,
+      count: g.count,
+      memberIds: g.memberIds,
+      isTop: index === groups.length - 1,
+      name,
+      kindLabel,
+      description: description || undefined,
+      controller,
+      targetLabels,
+      chip,
+    }
+  })
+}
+
 export function buildPhaseBoardView(
   stateRaw: unknown,
   legalRaw: PhaseLegalActions | unknown,
@@ -384,6 +547,7 @@ export function buildPhaseBoardView(
       gameOver: false,
       seats: [],
       stackCount: 0,
+      stackGroups: [],
       actionsByObject,
       flatActions: actions,
       autoPass,
@@ -421,6 +585,13 @@ export function buildPhaseBoardView(
     const exile = resolveIds(state.exile, objects, 'exile', id)
     const command = resolveIds(state.command_zone, objects, 'command', id)
 
+    const poison =
+      typeof p.poison_counters === 'number'
+        ? p.poison_counters
+        : typeof p.poisonCounters === 'number'
+          ? p.poisonCounters
+          : 0
+
     return {
       id,
       life: typeof p.life === 'number' ? p.life : 40,
@@ -434,6 +605,8 @@ export function buildPhaseBoardView(
       command,
       manaPool: parseManaPool(p),
       isEliminated: p.is_eliminated || state.eliminated_players?.includes(id),
+      poison,
+      commanderDamage: [],
     }
   })
 
@@ -443,6 +616,17 @@ export function buildPhaseBoardView(
     if (name) objectNames[String(k)] = name
     if (obj.id != null) objectNames[String(obj.id)] = name || objectNames[String(obj.id)] || ''
   }
+
+  const cmdBySeat = parseCommanderDamageForSeats(
+    state.derived,
+    objectNames,
+    seats.map((s) => s.id),
+  )
+  for (const seat of seats) {
+    seat.commanderDamage = cmdBySeat.get(seat.id) ?? []
+  }
+
+  const stackGroups = parseStackGroups(state, objects, objectNames)
 
   return {
     ok: true,
@@ -455,7 +639,8 @@ export function buildPhaseBoardView(
     waitingRaw: state.waiting_for ?? null,
     gameOver: Boolean(state.game_over),
     seats,
-    stackCount: Array.isArray(state.stack) ? state.stack.length : 0,
+    stackCount: Array.isArray(state.stack) ? state.stack.length : stackGroups.reduce((n, g) => n + g.count, 0),
+    stackGroups,
     actionsByObject,
     flatActions: actions,
     autoPass,
@@ -488,6 +673,13 @@ export async function hydrateBoardArt(view: PhaseBoardView): Promise<PhaseBoardV
       }
     }
   }
+  for (const g of view.stackGroups) {
+    const c = g.chip
+    if (!c || c.faceDown) continue
+    if (seen.has(c.card.name)) continue
+    seen.add(c.card.name)
+    stubs.push(c.card)
+  }
   if (stubs.length === 0) return view
   const hydrated = await hydrateCardRefs(stubs)
   const byName = new Map(hydrated.map((c) => [c.name, c]))
@@ -512,8 +704,29 @@ export async function hydrateBoardArt(view: PhaseBoardView): Promise<PhaseBoardV
     })
   }
 
+  const stackGroups = view.stackGroups.map((g) => {
+    if (!g.chip || g.chip.faceDown) return g
+    const h = byName.get(g.chip.card.name)
+    if (!h) return g
+    return {
+      ...g,
+      chip: {
+        ...g.chip,
+        card: {
+          ...g.chip.card,
+          ...h,
+          id: g.chip.card.id,
+          isCommander: g.chip.card.isCommander ?? h.isCommander,
+          power: g.chip.card.power ?? h.power,
+          toughness: g.chip.card.toughness ?? h.toughness,
+        },
+      },
+    }
+  })
+
   return {
     ...view,
+    stackGroups,
     seats: view.seats.map((s) => {
       const hand = apply(s.hand)
       const nonLands = apply(s.nonLands)

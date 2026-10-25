@@ -29,6 +29,38 @@ export type WaitingCombatBlockers = {
   validBlockTargets: Record<string, string[]>
 }
 
+export type CombatDamageSlot = {
+  blockerId: string
+  lethalMinimum: number
+}
+
+export type CombatDamageAssignmentMode = 'Normal' | 'AsThoughUnblocked'
+
+export type WaitingAssignCombatDamage = {
+  kind: 'AssignCombatDamage'
+  player: number
+  attackerId: string
+  totalDamage: number
+  blockers: CombatDamageSlot[]
+  /** Phase assignment_modes (always includes Normal when present). */
+  assignmentModes: CombatDamageAssignmentMode[]
+  /** Phase trample: Standard | OverPlaneswalkers | null. */
+  trample: 'Standard' | 'OverPlaneswalkers' | null
+  defendingPlayer: number
+  attackTarget?: AttackTarget
+  pwLoyalty?: number
+  pwController?: number
+}
+
+export type WaitingAssignBlockerDamage = {
+  kind: 'AssignBlockerDamage'
+  player: number
+  blockerId: string
+  totalDamage: number
+  /** Attackers this blocker is blocking — divide total among them. */
+  attackers: string[]
+}
+
 export type WaitingMulligan = {
   kind: 'MulliganDecision'
   freeFirstMulligan?: boolean
@@ -223,6 +255,8 @@ export type WaitingOther = {
 export type WaitingDetail =
   | WaitingCombatAttackers
   | WaitingCombatBlockers
+  | WaitingAssignCombatDamage
+  | WaitingAssignBlockerDamage
   | WaitingMulligan
   | WaitingManaPayment
   | WaitingManaSourceSelection
@@ -324,6 +358,111 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
       player,
       validBlockerIds,
       validBlockTargets,
+    }
+  }
+
+  if (type === 'AssignCombatDamage') {
+    const blockersRaw = Array.isArray(data.blockers) ? data.blockers : []
+    const blockers: CombatDamageSlot[] = []
+    for (const raw of blockersRaw) {
+      const b = asRecord(raw)
+      if (!b) continue
+      const blockerId = idStr(b.blocker_id ?? b.blockerId)
+      if (!blockerId) continue
+      const lethal =
+        typeof b.lethal_minimum === 'number'
+          ? b.lethal_minimum
+          : typeof b.lethalMinimum === 'number'
+            ? b.lethalMinimum
+            : 0
+      blockers.push({ blockerId, lethalMinimum: lethal })
+    }
+    const modesRaw = Array.isArray(data.assignment_modes)
+      ? data.assignment_modes
+      : Array.isArray(data.assignmentModes)
+        ? data.assignmentModes
+        : ['Normal']
+    const assignmentModes: CombatDamageAssignmentMode[] = []
+    for (const m of modesRaw) {
+      if (m === 'Normal' || m === 'AsThoughUnblocked') assignmentModes.push(m)
+      else if (typeof m === 'string') {
+        // ignore unknown — Phase is authority
+      }
+    }
+    if (assignmentModes.length === 0) assignmentModes.push('Normal')
+
+    let trample: WaitingAssignCombatDamage['trample'] = null
+    const tramp = data.trample
+    if (tramp === 'Standard' || tramp === 'OverPlaneswalkers') trample = tramp
+    else {
+      const tr = asRecord(tramp)
+      if (tr && typeof tr.type === 'string') {
+        if (tr.type === 'Standard' || tr.type === 'OverPlaneswalkers') {
+          trample = tr.type
+        }
+      }
+    }
+
+    const attackerId = idStr(data.attacker_id ?? data.attackerId) ?? '?'
+    const totalDamage =
+      typeof data.total_damage === 'number'
+        ? data.total_damage
+        : typeof data.totalDamage === 'number'
+          ? data.totalDamage
+          : 0
+    const defendingPlayer =
+      typeof data.defending_player === 'number'
+        ? data.defending_player
+        : typeof data.defendingPlayer === 'number'
+          ? data.defendingPlayer
+          : 0
+    const atRaw = data.attack_target ?? data.attackTarget
+    const attackTarget =
+      atRaw && typeof atRaw === 'object' && typeof (atRaw as AttackTarget).type === 'string'
+        ? (atRaw as AttackTarget)
+        : undefined
+    const pwLoyalty =
+      typeof data.pw_loyalty === 'number'
+        ? data.pw_loyalty
+        : typeof data.pwLoyalty === 'number'
+          ? data.pwLoyalty
+          : undefined
+    const pwController =
+      typeof data.pw_controller === 'number'
+        ? data.pw_controller
+        : typeof data.pwController === 'number'
+          ? data.pwController
+          : undefined
+    return {
+      kind: 'AssignCombatDamage',
+      player,
+      attackerId,
+      totalDamage,
+      blockers,
+      assignmentModes,
+      trample,
+      defendingPlayer,
+      attackTarget,
+      pwLoyalty,
+      pwController,
+    }
+  }
+
+  if (type === 'AssignBlockerDamage') {
+    const blockerId = idStr(data.blocker_id ?? data.blockerId) ?? '?'
+    const totalDamage =
+      typeof data.total_damage === 'number'
+        ? data.total_damage
+        : typeof data.totalDamage === 'number'
+          ? data.totalDamage
+          : 0
+    const attackers = numIds(data.attackers ?? [])
+    return {
+      kind: 'AssignBlockerDamage',
+      player,
+      blockerId,
+      totalDamage,
+      attackers,
     }
   }
 
@@ -868,6 +1007,135 @@ export function buildDeclareNoneBlockers(): PhaseGameAction {
   return { type: 'DeclareBlockers', data: { assignments: [] } }
 }
 
+/** Greedy lethal-first split (mirrors Phase AI candidate). Soft UI default only. */
+export function defaultCombatDamageSplit(detail: WaitingAssignCombatDamage): {
+  mode: CombatDamageAssignmentMode
+  amounts: Record<string, number>
+  trampleDamage: number
+  controllerDamage: number
+} {
+  let remaining = detail.totalDamage
+  const amounts: Record<string, number> = {}
+  for (const slot of detail.blockers) {
+    const assign = Math.min(remaining, slot.lethalMinimum)
+    amounts[slot.blockerId] = assign
+    remaining -= assign
+  }
+  let trampleDamage = 0
+  let controllerDamage = 0
+  if (detail.trample === 'OverPlaneswalkers' && remaining > 0) {
+    const loyalty = detail.pwLoyalty ?? 0
+    trampleDamage = Math.min(remaining, loyalty)
+    controllerDamage = remaining - trampleDamage
+  } else if (detail.trample != null) {
+    trampleDamage = remaining
+  } else if (remaining > 0 && detail.blockers.length > 0) {
+    const last = detail.blockers[detail.blockers.length - 1]!.blockerId
+    amounts[last] = (amounts[last] ?? 0) + remaining
+  }
+  return {
+    mode: 'Normal',
+    amounts,
+    trampleDamage,
+    controllerDamage,
+  }
+}
+
+export function combatDamageAssignedTotal(
+  amounts: Record<string, number>,
+  trampleDamage: number,
+  controllerDamage: number,
+): number {
+  let n = trampleDamage + controllerDamage
+  for (const v of Object.values(amounts)) n += v
+  return n
+}
+
+export function combatDamageReady(
+  detail: WaitingAssignCombatDamage,
+  mode: CombatDamageAssignmentMode,
+  amounts: Record<string, number>,
+  trampleDamage: number,
+  controllerDamage: number,
+): boolean {
+  if (mode === 'AsThoughUnblocked') {
+    return detail.assignmentModes.includes('AsThoughUnblocked')
+  }
+  if (!detail.assignmentModes.includes(mode) && mode !== 'Normal') return false
+  return (
+    combatDamageAssignedTotal(amounts, trampleDamage, controllerDamage) ===
+    detail.totalDamage
+  )
+}
+
+export function buildAssignCombatDamage(
+  mode: CombatDamageAssignmentMode,
+  amounts: Record<string, number>,
+  trampleDamage: number,
+  controllerDamage: number,
+): PhaseGameAction {
+  if (mode === 'AsThoughUnblocked') {
+    return {
+      type: 'AssignCombatDamage',
+      data: {
+        mode: 'AsThoughUnblocked',
+        assignments: [],
+        trample_damage: 0,
+        controller_damage: 0,
+      },
+    }
+  }
+  const assignments: Array<[number, number]> = []
+  for (const [id, dmg] of Object.entries(amounts)) {
+    if (dmg <= 0) continue
+    const n = Number(id)
+    if (!Number.isFinite(n)) continue
+    assignments.push([n, dmg])
+  }
+  return {
+    type: 'AssignCombatDamage',
+    data: {
+      mode: 'Normal',
+      assignments,
+      trample_damage: trampleDamage,
+      controller_damage: controllerDamage,
+    },
+  }
+}
+
+export function defaultBlockerDamageSplit(
+  detail: WaitingAssignBlockerDamage,
+): Record<string, number> {
+  const amounts: Record<string, number> = {}
+  for (const id of detail.attackers) amounts[id] = 0
+  if (detail.attackers.length > 0) {
+    amounts[detail.attackers[0]!] = detail.totalDamage
+  }
+  return amounts
+}
+
+export function blockerDamageReady(
+  detail: WaitingAssignBlockerDamage,
+  amounts: Record<string, number>,
+): boolean {
+  let n = 0
+  for (const id of detail.attackers) n += amounts[id] ?? 0
+  return n === detail.totalDamage
+}
+
+export function buildAssignBlockerDamage(
+  amounts: Record<string, number>,
+): PhaseGameAction {
+  const assignments: Array<[number, number]> = []
+  for (const [id, dmg] of Object.entries(amounts)) {
+    if (dmg <= 0) continue
+    const n = Number(id)
+    if (!Number.isFinite(n)) continue
+    assignments.push([n, dmg])
+  }
+  return { type: 'AssignBlockerDamage', data: { assignments } }
+}
+
 export function findMulliganActions(actions: PhaseGameAction[]): {
   keep?: PhaseGameAction
   mulligan?: PhaseGameAction
@@ -1013,6 +1281,8 @@ export function derivedEngineStops(
   switch (waiting.kind) {
     case 'DeclareAttackers':
     case 'DeclareBlockers':
+    case 'AssignCombatDamage':
+    case 'AssignBlockerDamage':
       stops.add('combat')
       break
     case 'MulliganDecision':
