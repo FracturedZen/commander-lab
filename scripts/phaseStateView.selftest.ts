@@ -167,6 +167,12 @@ import {
   multiTargetReady,
   selectedContributionTotal,
   summarizeCostLabel,
+  preferActivateAbility,
+  countRespondableActions,
+  hasBoardResponses,
+  formatSpellCostLabel,
+  isActivateAbility,
+  isCastOrActivate,
 } from '../src/engine/engineInteraction.ts'
 
 const waitAtk = parseWaitingFor({
@@ -819,6 +825,79 @@ assert(buildChooseDamageSource('300').type === 'ChooseDamageSource', 'ChooseDama
 assert(derivedEngineStops(waitCrew, 'main1').has('main1'), 'rail crew')
 assert(derivedEngineStops(waitTgt, 'main1').has('main1'), 'rail target step')
 assert(typeof summarizeCostLabel({ type: 'Tap' }) === 'string', 'cost label')
+
+
+
+// --- v0.6.8 activate / priority / spellCosts / command cast ---
+const actOnly = [
+  { type: 'ActivateAbility', data: { source_id: 50, ability_index: 0 } },
+  { type: 'TapLandForMana', data: { selection: { source: { object_id: 50 } } } },
+]
+const pref = preferActivateAbility(actOnly)
+assert(pref && pref !== 'picker' && pref.type === 'ActivateAbility', 'prefer single activate over mana')
+assert(
+  (pref as { data?: { payment_mode?: { type?: string } } }).data?.payment_mode?.type === 'Auto',
+  'activate auto pay',
+)
+assert(preferActivateAbility([
+  { type: 'ActivateAbility', data: { source_id: 50, ability_index: 0 } },
+  { type: 'ActivateAbility', data: { source_id: 50, ability_index: 1 } },
+]) === 'picker', 'multi activate picker')
+assert(
+  preferActivateAbility([
+    { type: 'CastSpell', data: { object_id: 9, targets: [] } },
+    { type: 'ActivateAbility', data: { source_id: 50, ability_index: 0 } },
+  ]) === null,
+  'cast beats activate pref',
+)
+assert(isActivateAbility(actOnly[0]!), 'isActivate')
+assert(isCastOrActivate(actOnly[0]!), 'castOrActivate')
+assert(countRespondableActions([
+  { type: 'PassPriority' },
+  { type: 'ActivateAbility', data: { source_id: 1, ability_index: 0 } },
+]) === 1, 'respondable')
+assert(
+  hasBoardResponses({
+    '50': [{ type: 'ActivateAbility', data: { source_id: 50, ability_index: 0 } }],
+  }),
+  'board responses',
+)
+assert(
+  formatSpellCostLabel({ type: 'Cost', shards: ['Green', 'Green'], generic: 2 }) === '{2}{G}{G}',
+  'cost label',
+)
+assert(formatSpellCostLabel({ type: 'NoCost' }) === '{0}', 'nocost')
+
+const legalWithCosts = {
+  actions: [
+    { type: 'PassPriority' },
+    {
+      type: 'CastSpell',
+      data: { object_id: 3, card_id: 1, targets: [], payment_mode: { type: 'Auto' } },
+    },
+    { type: 'ActivateAbility', data: { source_id: 2, ability_index: 0 } },
+  ],
+  autoPassRecommended: false,
+  spellCosts: {
+    '3': { type: 'Cost', shards: ['Red'], generic: 4 },
+  },
+  legal_actions_by_object: {
+    '2': [
+      {
+        type: 'ActivateAbility',
+        data: { source_id: 2, ability_index: 0 },
+        interactionActionId: 'x',
+      },
+    ],
+  },
+}
+const normCosts = normalizeLegalActions(legalWithCosts)
+assert(normCosts.spellCosts['3'] != null, 'spellCosts plumbed')
+assert(normCosts.actionsByObject['2']?.some((a) => a.type === 'ActivateAbility'), 'activate by object')
+assert(normCosts.actionsByObject['3']?.some((a) => a.type === 'CastSpell'), 'cast merged from flat')
+const viewCosts = buildPhaseBoardView(wrapped, legalWithCosts)
+assert(viewCosts.spellCosts['3'] != null, 'view spellCosts')
+assert(formatSpellCostLabel(viewCosts.spellCosts['3']) === '{4}{R}', 'cmd tax-ish cost')
 
 
 console.log('phaseStateView.selftest + engineInteraction: ok')

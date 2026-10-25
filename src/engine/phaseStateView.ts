@@ -103,6 +103,11 @@ export type PhaseBoardView = {
   pinnedPoolUnits: number[]
   /** object id → oracle/name for off-board WaitingFor modals (library search/scry). */
   objectNames: Record<string, string>
+  /**
+   * Phase `spellCosts` — effective mana cost per object id (includes commander tax /
+   * reductions). Present even when the spell is not currently castable.
+   */
+  spellCosts: Record<string, unknown>
 }
 
 type RawObj = {
@@ -316,9 +321,16 @@ export function normalizeLegalActions(raw: PhaseLegalActions | unknown): {
   actionsByObject: Record<string, PhaseGameAction[]>
   autoPass: boolean
   manaPaymentShortcutActions: PhaseGameAction[]
+  spellCosts: Record<string, unknown>
 } {
   if (!raw || typeof raw !== 'object') {
-    return { actions: [], actionsByObject: {}, autoPass: false, manaPaymentShortcutActions: [] }
+    return {
+      actions: [],
+      actionsByObject: {},
+      autoPass: false,
+      manaPaymentShortcutActions: [],
+      spellCosts: {},
+    }
   }
   const r = raw as Record<string, unknown>
   const actions = Array.isArray(r.actions) ? (r.actions as PhaseGameAction[]) : []
@@ -357,7 +369,53 @@ export function normalizeLegalActions(raw: PhaseLegalActions | unknown): {
     }
   }
 
-  return { actions, actionsByObject, autoPass, manaPaymentShortcutActions }
+  // Always merge flat cast/activate/play/foretell under their object so command-zone
+  // CastSpell and ActivateAbility glow even if by_object omitted a key.
+  for (const a of actions) {
+    if (
+      a.type !== 'ActivateAbility' &&
+      a.type !== 'PlayLand' &&
+      a.type !== 'Foretell' &&
+      a.type !== 'CastSpell' &&
+      a.type !== 'CastSpellForFree' &&
+      a.type !== 'CastSpellAsSneak' &&
+      a.type !== 'CastSpellAsWebSlinging' &&
+      a.type !== 'CastSpellAsMiracle' &&
+      a.type !== 'CastSpellAsMadness'
+    ) {
+      continue
+    }
+    const d = a.data as Record<string, unknown> | undefined
+    if (!d) continue
+    const oid = d.object_id ?? d.source_id ?? d.hand_object
+    if (oid == null) continue
+    const key = String(oid)
+    const list = actionsByObject[key] ?? (actionsByObject[key] = [])
+    const already = list.some((x) => {
+      if (x.type !== a.type) return false
+      const xd = x.data as Record<string, unknown> | undefined
+      if (a.type === 'ActivateAbility') {
+        return (
+          (xd?.ability_index ?? xd?.abilityIndex) ===
+            (d.ability_index ?? d.abilityIndex) &&
+          String(xd?.source_id ?? xd?.sourceId) === String(d.source_id ?? d.sourceId)
+        )
+      }
+      return String(xd?.object_id ?? xd?.source_id) === String(oid)
+    })
+    if (!already) list.push(a)
+  }
+
+  const spellCostsRaw =
+    (r.spellCosts as Record<string, unknown> | undefined) ??
+    (r.spell_costs as Record<string, unknown> | undefined) ??
+    {}
+  const spellCosts: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(spellCostsRaw)) {
+    spellCosts[String(k)] = v
+  }
+
+  return { actions, actionsByObject, autoPass, manaPaymentShortcutActions, spellCosts }
 }
 
 
@@ -533,7 +591,7 @@ export function buildPhaseBoardView(
   legalRaw: PhaseLegalActions | unknown,
 ): PhaseBoardView {
   const state = unwrapPhaseState(stateRaw)
-  const { actions, actionsByObject, autoPass, manaPaymentShortcutActions } = normalizeLegalActions(legalRaw)
+  const { actions, actionsByObject, autoPass, manaPaymentShortcutActions, spellCosts } = normalizeLegalActions(legalRaw)
 
   if (!state?.players || !state.objects) {
     return {
@@ -554,6 +612,7 @@ export function buildPhaseBoardView(
       manaPaymentShortcutActions,
       pinnedPoolUnits: [],
       objectNames: {},
+      spellCosts,
     }
   }
 
@@ -647,6 +706,7 @@ export function buildPhaseBoardView(
     manaPaymentShortcutActions,
     pinnedPoolUnits: parsePinnedPoolUnits(state),
     objectNames,
+    spellCosts,
   }
 }
 
@@ -752,6 +812,21 @@ export function summarizeAction(a: PhaseGameAction): string {
   const t = a.type
   const d = a.data as Record<string, unknown> | undefined
   if (!d) return t
+  if (t === 'ActivateAbility') {
+    const idx = d.ability_index ?? d.abilityIndex
+    const src = d.source_id ?? d.sourceId
+    return `ActivateAbility(#${idx ?? '?'}, source=${src ?? '?'})`
+  }
+  if (
+    t === 'CastSpell' ||
+    t === 'CastSpellForFree' ||
+    t.startsWith('CastSpell')
+  ) {
+    const oid = d.object_id ?? d.objectId
+    const targets = Array.isArray(d.targets) ? d.targets : []
+    const tgt = targets.length ? ` →[${targets.join(',')}]` : ''
+    return `${t}(obj=${oid ?? '?'}${tgt})`
+  }
   const bits = Object.entries(d)
     .slice(0, 4)
     .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v).slice(0, 40) : v}`)

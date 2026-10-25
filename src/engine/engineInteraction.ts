@@ -1310,6 +1310,15 @@ export function isCastFamily(a: PhaseGameAction): boolean {
   return CAST_FAMILY.has(a.type)
 }
 
+export function isActivateAbility(a: PhaseGameAction): boolean {
+  return a.type === 'ActivateAbility'
+}
+
+/** Cast family or ActivateAbility — share payment_mode stamping. */
+export function isCastOrActivate(a: PhaseGameAction): boolean {
+  return isCastFamily(a) || isActivateAbility(a)
+}
+
 export function isManaTapAction(a: PhaseGameAction): boolean {
   return MANA_TAP_TYPES.has(a.type)
 }
@@ -1399,7 +1408,7 @@ export function stampPaymentMode(
   action: PhaseGameAction,
   mode: CastPaymentModeType,
 ): PhaseGameAction {
-  if (!isCastFamily(action) && action.type !== 'ActivateAbility') return action
+  if (!isCastOrActivate(action)) return action
   const d = asRecord(action.data) ?? {}
   return {
     ...action,
@@ -1408,7 +1417,7 @@ export function stampPaymentMode(
 }
 
 export function ensureAutoPayment(action: PhaseGameAction): PhaseGameAction {
-  if (!isCastFamily(action) && action.type !== 'ActivateAbility') return action
+  if (!isCastOrActivate(action)) return action
   const d = asRecord(action.data) ?? {}
   const pm = asRecord(d.payment_mode)
   if (pm?.type === 'Manual') return action
@@ -1420,7 +1429,7 @@ export function applyPaymentPref(
   action: PhaseGameAction,
   pref: CastPaymentModeType,
 ): PhaseGameAction {
-  if (!isCastFamily(action) && action.type !== 'ActivateAbility') return action
+  if (!isCastOrActivate(action)) return action
   return stampPaymentMode(action, pref)
 }
 
@@ -1624,6 +1633,115 @@ export function pickUntargetedCast(actions: PhaseGameAction[]): PhaseGameAction 
   const casts = actions.filter(isCastFamily)
   const empty = casts.find((a) => actionTargets(a).length === 0)
   return empty ? ensureAutoPayment(empty) : null
+}
+
+/**
+ * Idle board click preference: a single ActivateAbility (targets/mana/optional
+ * via later WaitingFor) beats mixed mana taps — mana stays available during payment.
+ * Multiple activates → null (open picker). Cast family still wins when present.
+ */
+export function preferActivateAbility(
+  actions: PhaseGameAction[],
+): PhaseGameAction | 'picker' | null {
+  if (actions.some(isCastFamily)) return null
+  const activates = actions.filter(isActivateAbility)
+  if (activates.length === 0) return null
+  if (activates.length === 1) return ensureAutoPayment(activates[0]!)
+  return 'picker'
+}
+
+/** Non-pass legal actions the viewer can take (flat list; Phase authority). */
+export function countRespondableActions(actions: PhaseGameAction[]): number {
+  return actions.filter((a) => a.type !== 'PassPriority').length
+}
+
+/** True when viewer has priority-relevant board objects (cast/activate/play). */
+export function hasBoardResponses(
+  actionsByObject: Record<string, PhaseGameAction[]>,
+): boolean {
+  for (const list of Object.values(actionsByObject)) {
+    if (
+      list.some(
+        (a) =>
+          isCastOrActivate(a) ||
+          a.type === 'PlayLand' ||
+          a.type === 'Foretell',
+      )
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+const SHARD_PIP: Record<string, string> = {
+  White: 'W',
+  Blue: 'U',
+  Black: 'B',
+  Red: 'R',
+  Green: 'G',
+  Colorless: 'C',
+  Snow: 'S',
+  X: 'X',
+  WhiteBlue: 'W/U',
+  WhiteBlack: 'W/B',
+  BlueBlack: 'U/B',
+  BlueRed: 'U/R',
+  BlackRed: 'B/R',
+  BlackGreen: 'B/G',
+  RedWhite: 'R/W',
+  RedGreen: 'R/G',
+  GreenWhite: 'G/W',
+  GreenBlue: 'G/U',
+  TwoWhite: '2/W',
+  TwoBlue: '2/U',
+  TwoBlack: '2/B',
+  TwoRed: '2/R',
+  TwoGreen: '2/G',
+  PhyrexianWhite: 'W/P',
+  PhyrexianBlue: 'U/P',
+  PhyrexianBlack: 'B/P',
+  PhyrexianRed: 'R/P',
+  PhyrexianGreen: 'G/P',
+}
+
+/** Phase ManaCost (`{type:Cost|NoCost|…}`) → short `{2}{G}` label. */
+export function formatSpellCostLabel(raw: unknown): string | null {
+  if (raw == null) return null
+  if (typeof raw === 'string') {
+    if (raw === 'NoCost') return '{0}'
+    return raw
+  }
+  const r = asRecord(raw)
+  if (!r) return null
+  const t = typeof r.type === 'string' ? r.type : null
+  if (t === 'NoCost') return '{0}'
+  if (t === 'SelfManaCost') return 'mana cost'
+  if (t === 'SelfManaValue') return 'MV'
+  if (t === 'SelfManaCostReduced') {
+    const red = typeof r.reduction === 'number' ? r.reduction : 0
+    return `mana cost−${red}`
+  }
+  if (t !== 'Cost' && t != null) return t
+  const generic = typeof r.generic === 'number' ? r.generic : 0
+  const shards = Array.isArray(r.shards) ? r.shards : []
+  const parts: string[] = []
+  if (generic > 0) parts.push(`{${generic}}`)
+  for (const s of shards) {
+    const name = typeof s === 'string' ? s : asRecord(s)?.type
+    if (typeof name !== 'string') continue
+    parts.push(`{${SHARD_PIP[name] ?? name}}`)
+  }
+  if (parts.length === 0) return '{0}'
+  return parts.join('')
+}
+
+export function summarizeActivateAbility(a: PhaseGameAction): string {
+  const d = asRecord(a.data)
+  const idx = d?.ability_index ?? d?.abilityIndex
+  const src = d?.source_id ?? d?.sourceId
+  const n = typeof idx === 'number' ? idx : '?'
+  return `Activate ability #${n} (source ${src ?? '?'})`
 }
 
 /** Object ids that currently offer a mana-tap action. */

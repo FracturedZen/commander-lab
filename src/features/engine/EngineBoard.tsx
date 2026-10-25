@@ -56,6 +56,12 @@ import {
   phyrexianChoicesPayload,
   pickManaTapAction,
   pickUntargetedCast,
+  preferActivateAbility,
+  countRespondableActions,
+  hasBoardResponses,
+  formatSpellCostLabel,
+  isActivateAbility,
+  isCastFamily,
   summarizeManaSourceOption,
   libraryBipartReady,
   reorderCardsReady,
@@ -306,6 +312,22 @@ export function EngineBoard({
   const canPass =
     Boolean(passAction) &&
     (mode.kind === 'idle' || mode.kind === 'manaPay')
+  const respondableCount = useMemo(
+    () => countRespondableActions(view.flatActions),
+    [view.flatActions],
+  )
+  const boardResponses = useMemo(
+    () => hasBoardResponses(view.actionsByObject),
+    [view.actionsByObject],
+  )
+  const yourPriority = view.priorityPlayer === 0
+  const stackNonempty = view.stackCount > 0
+  const showPriorityBanner =
+    yourPriority &&
+    mode.kind === 'idle' &&
+    Boolean(passAction) &&
+    !view.waitingFor &&
+    (stackNonempty || respondableCount > 0 || boardResponses)
   const mulliganActs = useMemo(
     () => findMulliganActions(view.flatActions),
     [view.flatActions],
@@ -1064,6 +1086,21 @@ export function EngineBoard({
         acts.length === 1
       ) {
         submitWithManaPreview(untargeted)
+        return
+      }
+      // ActivateAbility: same mana/optional/target WaitingFor flow as casts after submit.
+      // Prefer a single activate over mixed mana taps (mana still legal during payment).
+      const activatePref = preferActivateAbility(acts)
+      if (activatePref && activatePref !== 'picker') {
+        submitWithManaPreview(activatePref)
+        return
+      }
+      if (activatePref === 'picker') {
+        setPicker({
+          objectId: card.objectId,
+          name: card.card.name,
+          actions: acts.filter(isActivateAbility),
+        })
         return
       }
       if (needsTargetingWizard(acts)) {
@@ -3001,6 +3038,36 @@ export function EngineBoard({
         dock
       />
 
+      {showPriorityBanner && (
+        <div
+          className={
+            stackNonempty
+              ? 'flex flex-wrap items-center gap-2 rounded-xl border border-violet-400/40 bg-violet-950/50 px-3 py-2 text-xs text-violet-50'
+              : 'flex flex-wrap items-center gap-2 rounded-xl border border-sky-400/35 bg-sky-950/45 px-3 py-2 text-xs text-sky-50'
+          }
+        >
+          <span className="font-semibold uppercase tracking-wide">
+            {stackNonempty ? 'Respond' : 'Your priority'}
+          </span>
+          <span className="text-white/70">
+            {stackNonempty
+              ? `Stack has ${view.stackCount} · glow = legal responses · Pass to let it resolve`
+              : boardResponses || respondableCount > 0
+                ? 'Glow marks legal plays/activates · Pass to advance'
+                : 'Nothing else legal · Pass to continue'}
+          </span>
+          {canPass && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => passAction && onSubmit(passAction)}
+              className="ml-auto rounded-full bg-sky-600 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-white disabled:opacity-40"
+            >
+              {stackNonempty ? 'Pass priority' : 'Pass'}
+            </button>
+          )}
+        </div>
+      )}
       {paymentBar}
       {modeBanner}
 
@@ -3129,7 +3196,33 @@ export function EngineBoard({
             </div>
 
             <div className="col-span-2 flex flex-wrap justify-end gap-2 sm:col-span-1 sm:flex-col">
-              {you.command.map((c) => renderChip(c, 'command'))}
+              {you.command.map((c) => {
+                const acts = view.actionsByObject[c.objectId] ?? []
+                const castable = acts.some(isCastFamily)
+                const costLabel = formatSpellCostLabel(view.spellCosts[c.objectId])
+                return (
+                  <div key={c.objectId} className="relative flex flex-col items-center gap-0.5">
+                    {renderChip(c, 'command')}
+                    {castable && (
+                      <span className="absolute -right-1 -top-1 rounded bg-cyan-400 px-1 text-[8px] font-bold uppercase text-cyan-950 shadow">
+                        Cast
+                      </span>
+                    )}
+                    {costLabel && (
+                      <span
+                        className={
+                          castable
+                            ? 'rounded bg-cyan-950/80 px-1 text-[9px] font-semibold tabular-nums text-cyan-100 ring-1 ring-cyan-400/50'
+                            : 'rounded bg-black/50 px-1 text-[9px] tabular-nums text-emerald-100/55'
+                        }
+                        title="Effective cost from Phase (includes commander tax)"
+                      >
+                        {costLabel}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
               <div className="flex gap-1 text-[10px] text-emerald-100/45">
                 <span>GY {you.graveyard.length}</span>
                 <span>Ex {you.exile.length}</span>
@@ -3193,7 +3286,11 @@ export function EngineBoard({
           }
           className="absolute bottom-3 right-3 z-20 rounded-full bg-gradient-to-b from-sky-400 to-sky-700 px-5 py-3 text-sm font-bold uppercase tracking-wide text-white shadow-xl shadow-sky-900/50 ring-2 ring-white/30 disabled:opacity-40"
         >
-          {mode.kind === 'manaPay' ? 'Confirm' : 'Pass'}
+          {mode.kind === 'manaPay'
+            ? 'Confirm'
+            : stackNonempty && yourPriority
+              ? 'Pass priority'
+              : 'Pass'}
         </button>
       </div>
 
