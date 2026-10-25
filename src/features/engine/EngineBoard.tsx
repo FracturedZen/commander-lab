@@ -84,6 +84,29 @@ import {
   type WaitingOrderTriggers,
   type WaitingReplacement,
   type WaitingPayAmount,
+  type WaitingCrewLike,
+  type WaitingAttachPick,
+  type WaitingOptionalCost,
+  type WaitingUnlessPayment,
+  type WaitingUnlessChooseCost,
+  type WaitingOptionalEffect,
+  type WaitingTargetStep,
+  type WaitingMultiTarget,
+  type WaitingObjectPick,
+  buildCrewVehicle,
+  buildSaddleMount,
+  buildEquip,
+  buildActivateStation,
+  buildDecideOptionalCost,
+  buildPayUnlessCost,
+  buildChooseUnlessCostBranch,
+  buildDecideOptionalEffect,
+  buildChooseTarget,
+  buildChoosePair,
+  buildChooseDamageSource,
+  crewLikeReady,
+  multiTargetReady,
+  selectedContributionTotal,
 } from '@/engine/engineInteraction'
 
 type Props = {
@@ -170,6 +193,15 @@ type UiMode =
       remember: boolean
     }
   | { kind: 'payAmount'; detail: WaitingPayAmount; value: number }
+  | { kind: 'crewLike'; detail: WaitingCrewLike; selected: string[] }
+  | { kind: 'attachPick'; detail: WaitingAttachPick }
+  | { kind: 'optionalCost'; detail: WaitingOptionalCost }
+  | { kind: 'unlessPayment'; detail: WaitingUnlessPayment }
+  | { kind: 'unlessChooseCost'; detail: WaitingUnlessChooseCost }
+  | { kind: 'optionalEffect'; detail: WaitingOptionalEffect }
+  | { kind: 'targetStep'; detail: WaitingTargetStep }
+  | { kind: 'multiTarget'; detail: WaitingMultiTarget; selected: string[] }
+  | { kind: 'objectPick'; detail: WaitingObjectPick }
 
 function LifeBadge({
   life,
@@ -436,6 +468,51 @@ export function EngineBoard({
       setPicker(null)
       return
     }
+    if (w?.kind === 'CrewLike' && w.player === 0) {
+      setMode({ kind: 'crewLike', detail: w, selected: [] })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'AttachPick' && w.player === 0) {
+      setMode({ kind: 'attachPick', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'OptionalCostChoice' && w.player === 0) {
+      setMode({ kind: 'optionalCost', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'UnlessPayment' && w.player === 0) {
+      setMode({ kind: 'unlessPayment', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'UnlessPaymentChooseCost' && w.player === 0) {
+      setMode({ kind: 'unlessChooseCost', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'OptionalEffect' && w.player === 0) {
+      setMode({ kind: 'optionalEffect', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'TargetStep' && w.player === 0) {
+      setMode({ kind: 'targetStep', detail: w })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'MultiTargetSelection' && w.player === 0) {
+      setMode({ kind: 'multiTarget', detail: w, selected: [] })
+      setPicker(null)
+      return
+    }
+    if (w?.kind === 'ObjectPick' && w.player === 0) {
+      setMode({ kind: 'objectPick', detail: w })
+      setPicker(null)
+      return
+    }
     setMode((m) => {
       if (
         m.kind === 'attackers' ||
@@ -456,7 +533,16 @@ export function EngineBoard({
         m.kind === 'cardPick' ||
         m.kind === 'orderTriggers' ||
         m.kind === 'replacement' ||
-        m.kind === 'payAmount'
+        m.kind === 'payAmount' ||
+        m.kind === 'crewLike' ||
+        m.kind === 'attachPick' ||
+        m.kind === 'optionalCost' ||
+        m.kind === 'unlessPayment' ||
+        m.kind === 'unlessChooseCost' ||
+        m.kind === 'optionalEffect' ||
+        m.kind === 'targetStep' ||
+        m.kind === 'multiTarget' ||
+        m.kind === 'objectPick'
       ) {
         return { kind: 'idle' }
       }
@@ -506,6 +592,15 @@ export function EngineBoard({
     if (mode.kind === 'libraryBipart') return new Set(mode.detail.cards)
     if (mode.kind === 'reorderCards') return new Set(mode.detail.cards)
     if (mode.kind === 'cardPick') return new Set(mode.detail.cards)
+    if (mode.kind === 'crewLike') return new Set(mode.detail.eligible)
+    if (mode.kind === 'attachPick') return new Set(mode.detail.eligible)
+    if (mode.kind === 'multiTarget') return new Set(mode.detail.legal)
+    if (mode.kind === 'objectPick') return new Set(mode.detail.choices)
+    if (mode.kind === 'targetStep') {
+      return new Set(
+        mode.detail.legal.filter((t) => t.kind === 'Object').map((t) => t.id),
+      )
+    }
     if (
       mode.kind === 'manaPay' ||
       mode.kind === 'manaSource' ||
@@ -544,6 +639,12 @@ export function EngineBoard({
     }
     if (mode.kind === 'discard' || mode.kind === 'effectZone' || mode.kind === 'cardPick') {
       return new Set(mode.selected)
+    }
+    if (mode.kind === 'crewLike' || mode.kind === 'multiTarget') {
+      return new Set(mode.selected)
+    }
+    if (mode.kind === 'attachPick') {
+      return new Set([mode.detail.subjectId])
     }
     if (mode.kind === 'libraryBipart') {
       return new Set(mode.order.filter((id) => !mode.rest.includes(id)))
@@ -595,7 +696,12 @@ export function EngineBoard({
       mode.kind === 'effectZone' ||
       mode.kind === 'cardPick' ||
       mode.kind === 'libraryBipart' ||
-      mode.kind === 'reorderCards'
+      mode.kind === 'reorderCards' ||
+      mode.kind === 'crewLike' ||
+      mode.kind === 'attachPick' ||
+      mode.kind === 'multiTarget' ||
+      mode.kind === 'objectPick' ||
+      mode.kind === 'targetStep'
     ) {
       if (choiceGlow.has(objectId) || selectedIds.has(objectId)) {
         return {
@@ -817,6 +923,77 @@ export function EngineBoard({
       return
     }
 
+    if (mode.kind === 'crewLike') {
+      if (!mode.detail.eligible.includes(card.objectId)) {
+        setInspect(card)
+        return
+      }
+      const selected = mode.selected.includes(card.objectId)
+        ? mode.selected.filter((id) => id !== card.objectId)
+        : [...mode.selected, card.objectId]
+      setMode({ ...mode, selected })
+      return
+    }
+
+    if (mode.kind === 'attachPick') {
+      if (!mode.detail.eligible.includes(card.objectId)) {
+        setInspect(card)
+        return
+      }
+      const d = mode.detail
+      setMode({ kind: 'idle' })
+      if (d.type === 'EquipTarget') {
+        onSubmit(buildEquip(d.subjectId, card.objectId))
+      } else {
+        onSubmit(buildActivateStation(d.subjectId, card.objectId))
+      }
+      return
+    }
+
+    if (mode.kind === 'multiTarget') {
+      if (!mode.detail.legal.includes(card.objectId)) {
+        setInspect(card)
+        return
+      }
+      const selected = mode.selected.includes(card.objectId)
+        ? mode.selected.filter((id) => id !== card.objectId)
+        : mode.selected.length < mode.detail.maxTargets
+          ? [...mode.selected, card.objectId]
+          : mode.selected
+      setMode({ ...mode, selected })
+      return
+    }
+
+    if (mode.kind === 'objectPick') {
+      if (!mode.detail.choices.includes(card.objectId)) {
+        setInspect(card)
+        return
+      }
+      const d = mode.detail
+      setMode({ kind: 'idle' })
+      if (d.type === 'PairChoice') {
+        onSubmit(buildChoosePair(card.objectId))
+      } else if (d.type === 'CopyTargetChoice') {
+        onSubmit(buildChooseTarget({ kind: 'Object', id: card.objectId }))
+      } else {
+        onSubmit(buildChooseDamageSource(card.objectId))
+      }
+      return
+    }
+
+    if (mode.kind === 'targetStep') {
+      const hit = mode.detail.legal.find(
+        (t) => t.kind === 'Object' && t.id === card.objectId,
+      )
+      if (!hit) {
+        setInspect(card)
+        return
+      }
+      setMode({ kind: 'idle' })
+      onSubmit(buildChooseTarget(hit))
+      return
+    }
+
     if (mode.kind === 'discard' || mode.kind === 'effectZone' || mode.kind === 'cardPick') {
       if (!mode.detail.cards.includes(card.objectId)) {
         setInspect(card)
@@ -956,6 +1133,26 @@ export function EngineBoard({
         : buildDeclareBlockersAction(mode.assignments)
     setMode({ kind: 'idle' })
     onSubmit(action)
+  }
+
+
+  function confirmCrewLike() {
+    if (mode.kind !== 'crewLike') return
+    if (!crewLikeReady(mode.detail, mode.selected)) return
+    const d = mode.detail
+    setMode({ kind: 'idle' })
+    if (d.type === 'CrewVehicle') {
+      onSubmit(buildCrewVehicle(d.subjectId, mode.selected))
+    } else {
+      onSubmit(buildSaddleMount(d.subjectId, mode.selected))
+    }
+  }
+
+  function confirmMultiTarget() {
+    if (mode.kind !== 'multiTarget') return
+    if (!multiTargetReady(mode.detail, mode.selected)) return
+    setMode({ kind: 'idle' })
+    onSubmit(buildSelectCards(mode.selected))
   }
 
   function confirmAssignCombatDamage() {
@@ -2417,6 +2614,300 @@ export function EngineBoard({
         >
           Confirm amount
         </button>
+      </div>
+
+    ) : mode.kind === 'crewLike' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-400/40 bg-sky-950/50 px-3 py-2 text-sm text-sky-50">
+        <span>
+          {mode.detail.type === 'CrewVehicle' ? 'Crew' : 'Saddle'}{' '}
+          <strong>{objectLabel(mode.detail.subjectId)}</strong> · need{' '}
+          {mode.detail.need} · contrib{' '}
+          {selectedContributionTotal(
+            mode.detail.eligible,
+            mode.detail.contributions,
+            mode.selected,
+          )}
+          /{mode.detail.need} · {mode.selected.length} tapped
+        </span>
+        <button
+          type="button"
+          disabled={busy || !crewLikeReady(mode.detail, mode.selected)}
+          className="rounded bg-sky-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmCrewLike}
+        >
+          Confirm
+        </button>
+        {cancelCast && (
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
+            onClick={() => onSubmit(cancelCast)}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    ) : mode.kind === 'attachPick' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-400/40 bg-sky-950/50 px-3 py-2 text-sm text-sky-50">
+        <span>
+          {mode.detail.type === 'EquipTarget' ? 'Equip' : 'Station'}{' '}
+          <strong>{objectLabel(mode.detail.subjectId)}</strong> — tap a glowing
+          creature
+        </span>
+        {cancelCast && (
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
+            onClick={() => onSubmit(cancelCast)}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    ) : mode.kind === 'optionalCost' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-fuchsia-400/40 bg-fuchsia-950/50 px-3 py-2 text-sm text-fuchsia-50">
+        <span>
+          Optional cost ({mode.detail.origin}
+          {mode.detail.timesKicked > 0
+            ? ` · kicked ×${mode.detail.timesKicked}`
+            : ''}
+          ): {mode.detail.costLabel}
+        </span>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded bg-fuchsia-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={() => {
+            setMode({ kind: 'idle' })
+            onSubmit(buildDecideOptionalCost(true))
+          }}
+        >
+          Pay
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded bg-slate-700 px-3 py-1 text-xs disabled:opacity-40"
+          onClick={() => {
+            setMode({ kind: 'idle' })
+            onSubmit(buildDecideOptionalCost(false))
+          }}
+        >
+          Don&apos;t pay
+        </button>
+      </div>
+    ) : mode.kind === 'unlessPayment' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
+        <span>
+          Pay {mode.detail.costLabel} to prevent
+          {mode.detail.effectDescription
+            ? ` “${mode.detail.effectDescription}”`
+            : ' the effect'}
+          ?
+        </span>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded bg-orange-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={() => {
+            setMode({ kind: 'idle' })
+            onSubmit(buildPayUnlessCost(true))
+          }}
+        >
+          Pay
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded bg-slate-700 px-3 py-1 text-xs disabled:opacity-40"
+          onClick={() => {
+            setMode({ kind: 'idle' })
+            onSubmit(buildPayUnlessCost(false))
+          }}
+        >
+          Decline
+        </button>
+      </div>
+    ) : mode.kind === 'unlessChooseCost' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-orange-400/40 bg-orange-950/50 px-3 py-2 text-sm text-orange-50">
+        <span>
+          Choose a cost to prevent
+          {mode.detail.effectDescription
+            ? ` “${mode.detail.effectDescription}”`
+            : ' the effect'}
+          , or decline
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {mode.detail.costLabels.map((label, i) => (
+            <button
+              key={i}
+              type="button"
+              disabled={busy}
+              className="rounded border border-orange-600 bg-orange-900/70 px-2 py-1 text-xs font-semibold disabled:opacity-40"
+              onClick={() => {
+                setMode({ kind: 'idle' })
+                onSubmit(
+                  buildChooseUnlessCostBranch({
+                    type: 'Pay',
+                    data: { index: i },
+                  }),
+                )
+              }}
+            >
+              Pay: {label}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-slate-700 px-3 py-1 text-xs disabled:opacity-40"
+            onClick={() => {
+              setMode({ kind: 'idle' })
+              onSubmit(buildChooseUnlessCostBranch({ type: 'Decline' }))
+            }}
+          >
+            Decline
+          </button>
+        </div>
+      </div>
+    ) : mode.kind === 'optionalEffect' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-400/40 bg-violet-950/50 px-3 py-2 text-sm text-violet-50">
+        <span>
+          {mode.detail.description}
+          {mode.detail.sourceId
+            ? ` · ${objectLabel(mode.detail.sourceId)}`
+            : ''}
+        </span>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded bg-violet-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={() => {
+            setMode({ kind: 'idle' })
+            onSubmit(buildDecideOptionalEffect(true))
+          }}
+        >
+          {mode.detail.type === 'TributeChoice' ? 'Pay tribute' : 'Accept'}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded bg-slate-700 px-3 py-1 text-xs disabled:opacity-40"
+          onClick={() => {
+            setMode({ kind: 'idle' })
+            onSubmit(buildDecideOptionalEffect(false))
+          }}
+        >
+          {mode.detail.type === 'TributeChoice' ? 'Decline tribute' : 'Decline'}
+        </button>
+      </div>
+    ) : mode.kind === 'targetStep' ? (
+      <div className="flex flex-col gap-2 rounded-lg border border-rose-400/40 bg-rose-950/50 px-3 py-2 text-sm text-rose-50">
+        <span>
+          Choose target
+          {mode.detail.slotCount > 1
+            ? ` (${mode.detail.currentSlot + 1}/${mode.detail.slotCount})`
+            : ''}
+          {mode.detail.modeLabel ? ` · ${mode.detail.modeLabel}` : ''}
+          {mode.detail.description ? ` — ${mode.detail.description}` : ''}
+          {mode.detail.optional ? ' (optional)' : ''}
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {mode.detail.legal
+            .filter((t) => t.kind === 'Player')
+            .map((t) => (
+              <button
+                key={`p${t.id}`}
+                type="button"
+                disabled={busy}
+                className="rounded border border-rose-500 bg-rose-900/70 px-2 py-1 text-xs font-semibold disabled:opacity-40"
+                onClick={() => {
+                  setMode({ kind: 'idle' })
+                  onSubmit(buildChooseTarget(t))
+                }}
+              >
+                Player {t.id}
+              </button>
+            ))}
+          {mode.detail.optional && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-slate-700 px-3 py-1 text-xs disabled:opacity-40"
+              onClick={() => {
+                setMode({ kind: 'idle' })
+                onSubmit(buildChooseTarget(null))
+              }}
+            >
+              Skip
+            </button>
+          )}
+          {cancelCast && mode.detail.type === 'TargetSelection' && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40"
+              onClick={() => onSubmit(cancelCast)}
+            >
+              Cancel cast
+            </button>
+          )}
+        </div>
+        <span className="text-[11px] text-rose-200/70">
+          Board glow = legal object targets — tap to choose
+        </span>
+      </div>
+    ) : mode.kind === 'multiTarget' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-400/40 bg-rose-950/50 px-3 py-2 text-sm text-rose-50">
+        <span>
+          Choose targets ({mode.detail.minTargets}
+          {mode.detail.maxTargets !== mode.detail.minTargets
+            ? `–${mode.detail.maxTargets}`
+            : ''}
+          ) · {mode.selected.length} selected
+        </span>
+        <button
+          type="button"
+          disabled={busy || !multiTargetReady(mode.detail, mode.selected)}
+          className="rounded bg-rose-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+          onClick={confirmMultiTarget}
+        >
+          Confirm
+        </button>
+      </div>
+    ) : mode.kind === 'objectPick' ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-950/50 px-3 py-2 text-sm text-cyan-50">
+        <span>
+          {mode.detail.type === 'PairChoice'
+            ? 'Choose Soulbond partner'
+            : mode.detail.type === 'CopyTargetChoice'
+              ? 'Choose copy target'
+              : 'Choose damage source'}
+          {mode.detail.sourceId
+            ? ` · ${objectLabel(mode.detail.sourceId)}`
+            : ''}{' '}
+          — tap a glowing permanent
+          {mode.detail.choices.length === 0 ? ' (none legal)' : ''}
+        </span>
+        {mode.detail.allowSkip && (
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded bg-slate-700 px-3 py-1 text-xs disabled:opacity-40"
+            onClick={() => {
+              setMode({ kind: 'idle' })
+              if (mode.detail.type === 'PairChoice') {
+                onSubmit(buildChoosePair(null))
+              } else {
+                onSubmit(buildChooseTarget(null))
+              }
+            }}
+          >
+            Skip
+          </button>
+        )}
       </div>
     ) : waitingDetail?.kind === 'MulliganDecision' &&
       (mulliganActs.keep || mulliganActs.mulligan) ? (

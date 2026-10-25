@@ -246,6 +246,95 @@ export type WaitingPayAmount = {
   resourceType: string
 }
 
+
+export type TargetRefWire =
+  | { kind: 'Object'; id: string }
+  | { kind: 'Player'; id: number }
+
+export type WaitingCrewLike = {
+  kind: 'CrewLike'
+  type: 'CrewVehicle' | 'SaddleMount'
+  player: number
+  subjectId: string
+  /** Phase crew_power / saddle_power threshold. */
+  need: number
+  eligible: string[]
+  /** Index-aligned Phase contributions (sum these, never raw power). */
+  contributions: number[]
+}
+
+export type WaitingAttachPick = {
+  kind: 'AttachPick'
+  type: 'EquipTarget' | 'StationTarget'
+  player: number
+  subjectId: string
+  eligible: string[]
+}
+
+export type WaitingOptionalCost = {
+  kind: 'OptionalCostChoice'
+  player: number
+  /** Display-only origin / cost tag from Phase. */
+  costLabel: string
+  timesKicked: number
+  origin: string
+}
+
+export type WaitingUnlessPayment = {
+  kind: 'UnlessPayment'
+  player: number
+  costLabel: string
+  effectDescription?: string
+}
+
+export type WaitingUnlessChooseCost = {
+  kind: 'UnlessPaymentChooseCost'
+  player: number
+  costLabels: string[]
+  effectDescription?: string
+}
+
+export type WaitingOptionalEffect = {
+  kind: 'OptionalEffect'
+  type: 'OptionalEffectChoice' | 'OpponentMayChoice' | 'TributeChoice'
+  player: number
+  sourceId?: string
+  description: string
+  /** Tribute counter count when type is TributeChoice. */
+  tributeCount?: number
+}
+
+export type WaitingTargetStep = {
+  kind: 'TargetStep'
+  type: 'TargetSelection' | 'TriggerTargetSelection'
+  player: number
+  currentSlot: number
+  slotCount: number
+  optional: boolean
+  legal: TargetRefWire[]
+  modeLabel?: string
+  sourceId?: string
+  description?: string
+}
+
+export type WaitingMultiTarget = {
+  kind: 'MultiTargetSelection'
+  player: number
+  legal: string[]
+  minTargets: number
+  maxTargets: number
+}
+
+export type WaitingObjectPick = {
+  kind: 'ObjectPick'
+  type: 'PairChoice' | 'CopyTargetChoice' | 'DamageSourceChoice'
+  player: number
+  sourceId?: string
+  choices: string[]
+  /** PairChoice / empty CopyTarget: ChooseTarget{None} / ChoosePair{None} allowed. */
+  allowSkip: boolean
+}
+
 export type WaitingOther = {
   kind: 'Other'
   type: string
@@ -273,6 +362,15 @@ export type WaitingDetail =
   | WaitingOrderTriggers
   | WaitingReplacement
   | WaitingPayAmount
+  | WaitingCrewLike
+  | WaitingAttachPick
+  | WaitingOptionalCost
+  | WaitingUnlessPayment
+  | WaitingUnlessChooseCost
+  | WaitingOptionalEffect
+  | WaitingTargetStep
+  | WaitingMultiTarget
+  | WaitingObjectPick
   | WaitingOther
   | null
 
@@ -302,6 +400,151 @@ function numIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
   return raw.map(idStr).filter((x): x is string => x != null)
 }
+
+
+function parseTargetRef(raw: unknown): TargetRefWire | null {
+  if (raw == null) return null
+  if (typeof raw === 'number' || typeof raw === 'string') {
+    return { kind: 'Object', id: String(raw) }
+  }
+  const r = asRecord(raw)
+  if (!r) return null
+  // Externally tagged: { Object: id } / { Player: n }
+  if ('Object' in r) {
+    const id = idStr(r.Object)
+    return id ? { kind: 'Object', id } : null
+  }
+  if ('Player' in r) {
+    const p = r.Player
+    if (typeof p === 'number') return { kind: 'Player', id: p }
+    if (typeof p === 'string' && Number.isFinite(Number(p))) return { kind: 'Player', id: Number(p) }
+  }
+  // Internally tagged fallback: { type: 'Object', data } / { type: 'Player', data }
+  const t = typeof r.type === 'string' ? r.type : null
+  if (t === 'Object') {
+    const id = idStr(r.data ?? r.id ?? r.object_id ?? r.objectId)
+    return id ? { kind: 'Object', id } : null
+  }
+  if (t === 'Player') {
+    const p = r.data ?? r.id ?? r.player
+    if (typeof p === 'number') return { kind: 'Player', id: p }
+    if (typeof p === 'string' && Number.isFinite(Number(p))) return { kind: 'Player', id: Number(p) }
+  }
+  return null
+}
+
+function parseTargetRefs(raw: unknown): TargetRefWire[] {
+  if (!Array.isArray(raw)) return []
+  const out: TargetRefWire[] = []
+  for (const x of raw) {
+    const t = parseTargetRef(x)
+    if (t) out.push(t)
+  }
+  return out
+}
+
+/** Display-only AbilityCost / AdditionalCost / nested cost label from Phase JSON. */
+export function summarizeCostLabel(raw: unknown): string {
+  if (raw == null) return 'cost'
+  if (typeof raw === 'string') return raw
+  const r = asRecord(raw)
+  if (!r) return 'cost'
+  const t = typeof r.type === 'string' ? r.type : null
+  if (!t) return 'cost'
+  const data = r.data !== undefined ? r.data : r
+  const d = asRecord(data) ?? (typeof data === 'object' ? null : null)
+  switch (t) {
+    case 'Mana': {
+      const cost = asRecord(d?.cost ?? r.cost)
+      if (!cost) return 'mana'
+      const bits: string[] = []
+      for (const k of ['white', 'blue', 'black', 'red', 'green', 'colorless', 'generic', 'W', 'U', 'B', 'R', 'G', 'C', 'X']) {
+        const v = cost[k]
+        if (typeof v === 'number' && v > 0) bits.push(`${k}${v}`)
+      }
+      return bits.length ? `{${bits.join('')}}` : 'mana'
+    }
+    case 'ManaDynamic':
+      return 'mana (X)'
+    case 'Tap':
+      return '{T}'
+    case 'Untap':
+      return '{Q}'
+    case 'Loyalty':
+      return `loyalty ${d?.amount ?? r.amount ?? '?'}`
+    case 'PayLife':
+      return `pay life`
+    case 'PayEnergy':
+      return 'pay energy'
+    case 'Discard':
+      return 'discard'
+    case 'Sacrifice':
+      return 'sacrifice'
+    case 'Exile':
+      return 'exile'
+    case 'Optional': {
+      const inner = d?.cost ?? asRecord(data)?.cost ?? r.cost
+      return `optional ${summarizeCostLabel(inner)}`
+    }
+    case 'Kicker': {
+      const costs = Array.isArray(d?.costs) ? d!.costs : Array.isArray(r.costs) ? r.costs : []
+      const labels = costs.map(summarizeCostLabel)
+      return labels.length ? `kicker ${labels.join(' / ')}` : 'kicker'
+    }
+    case 'Choice':
+      return 'choice cost'
+    case 'Required':
+      return summarizeCostLabel(data)
+    default:
+      return t
+  }
+}
+
+export function targetRefToWire(ref: TargetRefWire): unknown {
+  if (ref.kind === 'Object') return { Object: Number(ref.id) }
+  return { Player: ref.id }
+}
+
+export function contributionOf(
+  eligible: string[],
+  contributions: number[],
+  id: string,
+): number {
+  const i = eligible.indexOf(id)
+  if (i < 0) return 0
+  if (contributions.length === 0) return 1 // legacy soft gate; engine still validates
+  return contributions[i] ?? 0
+}
+
+export function selectedContributionTotal(
+  eligible: string[],
+  contributions: number[],
+  selected: string[],
+): number {
+  let n = 0
+  for (const id of selected) n += contributionOf(eligible, contributions, id)
+  return n
+}
+
+export function crewLikeReady(detail: WaitingCrewLike, selected: string[]): boolean {
+  if (selected.length === 0) return detail.need <= 0
+  for (const id of selected) {
+    if (!detail.eligible.includes(id)) return false
+  }
+  return selectedContributionTotal(detail.eligible, detail.contributions, selected) >= detail.need
+}
+
+export function multiTargetReady(
+  detail: WaitingMultiTarget,
+  selected: string[],
+): boolean {
+  if (selected.length < detail.minTargets || selected.length > detail.maxTargets) return false
+  for (const id of selected) {
+    if (!detail.legal.includes(id)) return false
+  }
+  return true
+}
+
 
 export function parseWaitingFor(raw: unknown): WaitingDetail {
   if (!raw) return null
@@ -833,6 +1076,229 @@ export function parseWaitingFor(raw: unknown): WaitingDetail {
     }
   }
 
+
+  if (type === 'CrewVehicle' || type === 'SaddleMount') {
+    const eligible = numIds(data.eligible_creatures ?? data.eligibleCreatures ?? [])
+    const contribRaw = data.contributions
+    const contributions = Array.isArray(contribRaw)
+      ? contribRaw.map((x) => (typeof x === 'number' ? x : 0))
+      : []
+    const need =
+      type === 'CrewVehicle'
+        ? typeof data.crew_power === 'number'
+          ? data.crew_power
+          : typeof data.crewPower === 'number'
+            ? data.crewPower
+            : 0
+        : typeof data.saddle_power === 'number'
+          ? data.saddle_power
+          : typeof data.saddlePower === 'number'
+            ? data.saddlePower
+            : 0
+    const subjectId =
+      idStr(
+        type === 'CrewVehicle'
+          ? (data.vehicle_id ?? data.vehicleId)
+          : (data.mount_id ?? data.mountId),
+      ) ?? '?'
+    return {
+      kind: 'CrewLike',
+      type,
+      player,
+      subjectId,
+      need,
+      eligible,
+      contributions,
+    }
+  }
+
+  if (type === 'EquipTarget' || type === 'StationTarget') {
+    const eligible = numIds(
+      type === 'EquipTarget'
+        ? (data.valid_targets ?? data.validTargets ?? [])
+        : (data.eligible_creatures ?? data.eligibleCreatures ?? []),
+    )
+    const subjectId =
+      idStr(
+        type === 'EquipTarget'
+          ? (data.equipment_id ?? data.equipmentId)
+          : (data.spacecraft_id ?? data.spacecraftId),
+      ) ?? '?'
+    return { kind: 'AttachPick', type, player, subjectId, eligible }
+  }
+
+  if (type === 'OptionalCostChoice') {
+    const origin =
+      typeof data.origin === 'string'
+        ? data.origin
+        : typeof asRecord(data.origin)?.type === 'string'
+          ? String(asRecord(data.origin)!.type)
+          : 'Optional'
+    const timesKicked =
+      typeof data.times_kicked === 'number'
+        ? data.times_kicked
+        : typeof data.timesKicked === 'number'
+          ? data.timesKicked
+          : 0
+    return {
+      kind: 'OptionalCostChoice',
+      player,
+      costLabel: summarizeCostLabel(data.cost),
+      timesKicked,
+      origin,
+    }
+  }
+
+  if (type === 'UnlessPayment') {
+    return {
+      kind: 'UnlessPayment',
+      player,
+      costLabel: summarizeCostLabel(data.cost),
+      effectDescription:
+        typeof data.effect_description === 'string'
+          ? data.effect_description
+          : typeof data.effectDescription === 'string'
+            ? data.effectDescription
+            : undefined,
+    }
+  }
+
+  if (type === 'UnlessPaymentChooseCost') {
+    const rawCosts = Array.isArray(data.costs) ? data.costs : []
+    return {
+      kind: 'UnlessPaymentChooseCost',
+      player,
+      costLabels: rawCosts.map(summarizeCostLabel),
+      effectDescription:
+        typeof data.effect_description === 'string'
+          ? data.effect_description
+          : typeof data.effectDescription === 'string'
+            ? data.effectDescription
+            : undefined,
+    }
+  }
+
+  if (
+    type === 'OptionalEffectChoice' ||
+    type === 'OpponentMayChoice' ||
+    type === 'TributeChoice'
+  ) {
+    let description = ''
+    if (type === 'TributeChoice') {
+      const count =
+        typeof data.count === 'number' ? data.count : 0
+      description = `Tribute: place ${count} +1/+1 counter${count === 1 ? '' : 's'}?`
+    } else {
+      description =
+        typeof data.description === 'string' && data.description
+          ? data.description
+          : 'You may …'
+    }
+    return {
+      kind: 'OptionalEffect',
+      type,
+      player,
+      sourceId: idStr(data.source_id ?? data.sourceId) ?? undefined,
+      description,
+      tributeCount: type === 'TributeChoice' && typeof data.count === 'number' ? data.count : undefined,
+    }
+  }
+
+  if (type === 'TargetSelection' || type === 'TriggerTargetSelection') {
+    const slotsRaw = Array.isArray(data.target_slots)
+      ? data.target_slots
+      : Array.isArray(data.targetSlots)
+        ? data.targetSlots
+        : []
+    const selection = asRecord(data.selection) ?? {}
+    const currentSlot =
+      typeof selection.current_slot === 'number'
+        ? selection.current_slot
+        : typeof selection.currentSlot === 'number'
+          ? selection.currentSlot
+          : 0
+    const legal = parseTargetRefs(
+      selection.current_legal_targets ?? selection.currentLegalTargets ?? [],
+    )
+    const slotRec = asRecord(slotsRaw[currentSlot])
+    const optional = Boolean(slotRec?.optional)
+    const modeLabels = Array.isArray(data.mode_labels)
+      ? data.mode_labels
+      : Array.isArray(data.modeLabels)
+        ? data.modeLabels
+        : []
+    const modeLabelRaw = modeLabels[currentSlot]
+    const modeLabel =
+      typeof modeLabelRaw === 'string' ? modeLabelRaw : undefined
+    return {
+      kind: 'TargetStep',
+      type,
+      player,
+      currentSlot,
+      slotCount: slotsRaw.length,
+      optional,
+      legal,
+      modeLabel,
+      sourceId: idStr(data.source_id ?? data.sourceId) ?? undefined,
+      description:
+        typeof data.description === 'string' ? data.description : undefined,
+    }
+  }
+
+  if (type === 'MultiTargetSelection') {
+    return {
+      kind: 'MultiTargetSelection',
+      player,
+      legal: numIds(data.legal_targets ?? data.legalTargets ?? []),
+      minTargets:
+        typeof data.min_targets === 'number'
+          ? data.min_targets
+          : typeof data.minTargets === 'number'
+            ? data.minTargets
+            : 0,
+      maxTargets:
+        typeof data.max_targets === 'number'
+          ? data.max_targets
+          : typeof data.maxTargets === 'number'
+            ? data.maxTargets
+            : 0,
+    }
+  }
+
+  if (type === 'PairChoice') {
+    return {
+      kind: 'ObjectPick',
+      type,
+      player,
+      sourceId: idStr(data.source_id ?? data.sourceId) ?? undefined,
+      choices: numIds(data.choices ?? []),
+      allowSkip: true,
+    }
+  }
+
+  if (type === 'CopyTargetChoice') {
+    const choices = numIds(data.valid_targets ?? data.validTargets ?? [])
+    return {
+      kind: 'ObjectPick',
+      type,
+      player,
+      sourceId: idStr(data.source_id ?? data.sourceId) ?? undefined,
+      choices,
+      allowSkip: choices.length === 0,
+    }
+  }
+
+  if (type === 'DamageSourceChoice') {
+    return {
+      kind: 'ObjectPick',
+      type,
+      player,
+      choices: numIds(data.options ?? []),
+      allowSkip: false,
+    }
+  }
+
+
   return {
     kind: 'Other',
     type,
@@ -1303,6 +1769,15 @@ export function derivedEngineStops(
     case 'OrderTriggers':
     case 'ReplacementChoice':
     case 'PayAmountChoice':
+    case 'CrewLike':
+    case 'AttachPick':
+    case 'OptionalCostChoice':
+    case 'UnlessPayment':
+    case 'UnlessPaymentChooseCost':
+    case 'OptionalEffect':
+    case 'TargetStep':
+    case 'MultiTargetSelection':
+    case 'ObjectPick':
       stops.add(seg)
       break
     case 'Other':
@@ -1443,6 +1918,102 @@ export function payAmountInRange(
     detail.min <= detail.max
   )
 }
+
+
+export function buildCrewVehicle(
+  vehicleId: string,
+  creatureIds: string[],
+): PhaseGameAction {
+  return {
+    type: 'CrewVehicle',
+    data: {
+      vehicle_id: Number(vehicleId),
+      creature_ids: creatureIds.map(Number).filter((n) => Number.isFinite(n)),
+    },
+  }
+}
+
+export function buildSaddleMount(
+  mountId: string,
+  creatureIds: string[],
+): PhaseGameAction {
+  return {
+    type: 'SaddleMount',
+    data: {
+      mount_id: Number(mountId),
+      creature_ids: creatureIds.map(Number).filter((n) => Number.isFinite(n)),
+    },
+  }
+}
+
+export function buildEquip(equipmentId: string, targetId: string): PhaseGameAction {
+  return {
+    type: 'Equip',
+    data: { equipment_id: Number(equipmentId), target_id: Number(targetId) },
+  }
+}
+
+export function buildActivateStation(
+  spacecraftId: string,
+  creatureId: string,
+): PhaseGameAction {
+  return {
+    type: 'ActivateStation',
+    data: {
+      spacecraft_id: Number(spacecraftId),
+      creature_id: Number(creatureId),
+    },
+  }
+}
+
+export function buildDecideOptionalCost(pay: boolean): PhaseGameAction {
+  return { type: 'DecideOptionalCost', data: { pay } }
+}
+
+export function buildPayUnlessCost(pay: boolean): PhaseGameAction {
+  return { type: 'PayUnlessCost', data: { pay } }
+}
+
+export function buildChooseUnlessCostBranch(
+  choice: { type: 'Decline' } | { type: 'Pay'; data: { index: number } },
+): PhaseGameAction {
+  return { type: 'ChooseUnlessCostBranch', data: { choice } }
+}
+
+export function buildDecideOptionalEffect(accept: boolean): PhaseGameAction {
+  return { type: 'DecideOptionalEffect', data: { accept } }
+}
+
+export function buildChooseTarget(
+  target: TargetRefWire | null,
+): PhaseGameAction {
+  return {
+    type: 'ChooseTarget',
+    data: { target: target ? targetRefToWire(target) : null },
+  }
+}
+
+export function buildSelectTargets(targets: TargetRefWire[]): PhaseGameAction {
+  return {
+    type: 'SelectTargets',
+    data: { targets: targets.map(targetRefToWire) },
+  }
+}
+
+export function buildChoosePair(partnerId: string | null): PhaseGameAction {
+  return {
+    type: 'ChoosePair',
+    data: { partner: partnerId != null ? Number(partnerId) : null },
+  }
+}
+
+export function buildChooseDamageSource(sourceId: string): PhaseGameAction {
+  return {
+    type: 'ChooseDamageSource',
+    data: { source: Number(sourceId) },
+  }
+}
+
 
 export function isReplacementOrderMode(detail: WaitingReplacement): boolean {
   return detail.kindType === 'Order' && detail.candidateCount > 1

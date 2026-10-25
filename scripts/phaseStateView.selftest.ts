@@ -152,6 +152,21 @@ import {
   cardPickReady,
   payAmountInRange,
   isReplacementOrderMode,
+  buildCrewVehicle,
+  buildSaddleMount,
+  buildEquip,
+  buildActivateStation,
+  buildDecideOptionalCost,
+  buildPayUnlessCost,
+  buildChooseUnlessCostBranch,
+  buildDecideOptionalEffect,
+  buildChooseTarget,
+  buildChoosePair,
+  buildChooseDamageSource,
+  crewLikeReady,
+  multiTargetReady,
+  selectedContributionTotal,
+  summarizeCostLabel,
 } from '../src/engine/engineInteraction.ts'
 
 const waitAtk = parseWaitingFor({
@@ -640,5 +655,170 @@ assert(viewStack.seats[0]!.poison === 2, 'poison')
 assert(viewStack.seats[1]!.commanderDamage.length === 1, 'cmd dmg')
 assert(viewStack.seats[1]!.commanderDamage[0]!.damage === 6, 'cmd dmg amt')
 assert(viewStack.stackCount === 2, 'stack count')
+
+
+// --- v0.6.7 crew/equip/optional/unless/target-step/object-pick ---
+const waitCrew = parseWaitingFor({
+  type: 'CrewVehicle',
+  data: {
+    player: 0,
+    vehicle_id: 200,
+    crew_power: 3,
+    eligible_creatures: [201, 202, 203],
+    contributions: [1, 2, 3],
+  },
+})
+assert(waitCrew?.kind === 'CrewLike' && waitCrew.type === 'CrewVehicle', 'parse CrewVehicle')
+if (waitCrew?.kind === 'CrewLike') {
+  assert(waitCrew.need === 3 && waitCrew.eligible.length === 3, 'crew fields')
+  assert(!crewLikeReady(waitCrew, ['201']), 'crew under')
+  assert(crewLikeReady(waitCrew, ['202', '201']), 'crew meet')
+  assert(selectedContributionTotal(waitCrew.eligible, waitCrew.contributions, ['203']) === 3, 'contrib')
+  assert(buildCrewVehicle('200', ['202', '201']).type === 'CrewVehicle', 'CrewVehicle action')
+}
+
+const waitSaddle = parseWaitingFor({
+  type: 'SaddleMount',
+  data: { player: 0, mount_id: 210, saddle_power: 2, eligible_creatures: [211], contributions: [2] },
+})
+assert(waitSaddle?.kind === 'CrewLike' && waitSaddle.type === 'SaddleMount', 'parse Saddle')
+assert(buildSaddleMount('210', ['211']).type === 'SaddleMount', 'SaddleMount action')
+
+const waitEquip = parseWaitingFor({
+  type: 'EquipTarget',
+  data: { player: 0, equipment_id: 220, valid_targets: [221, 222] },
+})
+assert(waitEquip?.kind === 'AttachPick' && waitEquip.type === 'EquipTarget', 'parse Equip')
+assert(buildEquip('220', '221').type === 'Equip', 'Equip action')
+
+const waitStation = parseWaitingFor({
+  type: 'StationTarget',
+  data: { player: 0, spacecraft_id: 230, eligible_creatures: [231] },
+})
+assert(waitStation?.kind === 'AttachPick' && waitStation.type === 'StationTarget', 'parse Station')
+assert(buildActivateStation('230', '231').type === 'ActivateStation', 'Station action')
+
+const waitOptCost = parseWaitingFor({
+  type: 'OptionalCostChoice',
+  data: {
+    player: 0,
+    cost: { type: 'Optional', data: { cost: { type: 'PayLife', amount: { type: 'Literal', data: 2 } } } },
+    times_kicked: 1,
+    origin: 'Kicker',
+  },
+})
+assert(waitOptCost?.kind === 'OptionalCostChoice', 'parse OptionalCost')
+if (waitOptCost?.kind === 'OptionalCostChoice') {
+  assert(waitOptCost.origin === 'Kicker' && waitOptCost.timesKicked === 1, 'opt cost meta')
+  assert(buildDecideOptionalCost(true).type === 'DecideOptionalCost', 'DecideOptionalCost')
+}
+
+const waitUnless = parseWaitingFor({
+  type: 'UnlessPayment',
+  data: {
+    player: 0,
+    cost: { type: 'Mana', cost: { generic: 3 } },
+    effect_description: 'counter target spell',
+  },
+})
+assert(waitUnless?.kind === 'UnlessPayment', 'parse UnlessPayment')
+assert(buildPayUnlessCost(false).type === 'PayUnlessCost', 'PayUnlessCost')
+
+const waitUnlessChoose = parseWaitingFor({
+  type: 'UnlessPaymentChooseCost',
+  data: {
+    player: 0,
+    costs: [{ type: 'Sacrifice' }, { type: 'Discard' }],
+    effect_description: 'lose life',
+  },
+})
+assert(waitUnlessChoose?.kind === 'UnlessPaymentChooseCost', 'parse UnlessChoose')
+if (waitUnlessChoose?.kind === 'UnlessPaymentChooseCost') {
+  assert(waitUnlessChoose.costLabels.length === 2, 'unless branches')
+  const pay = buildChooseUnlessCostBranch({ type: 'Pay', data: { index: 1 } })
+  assert(pay.type === 'ChooseUnlessCostBranch', 'ChooseUnlessCostBranch')
+  assert(buildChooseUnlessCostBranch({ type: 'Decline' }).type === 'ChooseUnlessCostBranch', 'decline branch')
+}
+
+const waitMay = parseWaitingFor({
+  type: 'OptionalEffectChoice',
+  data: { player: 0, source_id: 240, description: 'draw a card' },
+})
+assert(waitMay?.kind === 'OptionalEffect', 'parse OptionalEffect')
+assert(buildDecideOptionalEffect(true).type === 'DecideOptionalEffect', 'DecideOptionalEffect')
+
+const waitTribute = parseWaitingFor({
+  type: 'TributeChoice',
+  data: { player: 0, source_id: 241, count: 2 },
+})
+assert(waitTribute?.kind === 'OptionalEffect' && waitTribute.type === 'TributeChoice', 'parse Tribute')
+
+const waitTgt = parseWaitingFor({
+  type: 'TargetSelection',
+  data: {
+    player: 0,
+    target_slots: [{ legal_targets: [], optional: true, effect_kind: 'Damage' }],
+    selection: {
+      current_slot: 0,
+      current_legal_targets: [{ Object: 250 }, { Player: 1 }],
+    },
+  },
+})
+assert(waitTgt?.kind === 'TargetStep', 'parse TargetSelection')
+if (waitTgt?.kind === 'TargetStep') {
+  assert(waitTgt.optional && waitTgt.legal.length === 2, 'target step legal')
+  assert(waitTgt.legal.some((t) => t.kind === 'Player' && t.id === 1), 'player target')
+  assert(buildChooseTarget(waitTgt.legal[0]!).type === 'ChooseTarget', 'ChooseTarget')
+  assert(buildChooseTarget(null).type === 'ChooseTarget', 'ChooseTarget skip')
+}
+
+const waitTrigTgt = parseWaitingFor({
+  type: 'TriggerTargetSelection',
+  data: {
+    player: 0,
+    source_id: 260,
+    description: 'destroy target',
+    target_slots: [{ legal_targets: [], optional: false, effect_kind: 'Destroy' }],
+    selection: { current_slot: 0, current_legal_targets: [{ Object: 261 }] },
+  },
+})
+assert(waitTrigTgt?.kind === 'TargetStep' && waitTrigTgt.type === 'TriggerTargetSelection', 'parse TriggerTarget')
+
+const waitMulti = parseWaitingFor({
+  type: 'MultiTargetSelection',
+  data: { player: 0, legal_targets: [270, 271, 272], min_targets: 0, max_targets: 2 },
+})
+assert(waitMulti?.kind === 'MultiTargetSelection', 'parse MultiTarget')
+if (waitMulti?.kind === 'MultiTargetSelection') {
+  assert(multiTargetReady(waitMulti, []), 'multi empty ok')
+  assert(multiTargetReady(waitMulti, ['270', '271']), 'multi two')
+  assert(!multiTargetReady(waitMulti, ['270', '271', '272']), 'multi over')
+}
+
+const waitPair = parseWaitingFor({
+  type: 'PairChoice',
+  data: { player: 0, source_id: 280, choices: [281, 282] },
+})
+assert(waitPair?.kind === 'ObjectPick' && waitPair.allowSkip, 'parse Pair')
+assert(buildChoosePair('281').type === 'ChoosePair', 'ChoosePair')
+assert(buildChoosePair(null).type === 'ChoosePair', 'ChoosePair skip')
+
+const waitCopy = parseWaitingFor({
+  type: 'CopyTargetChoice',
+  data: { player: 0, source_id: 290, valid_targets: [291] },
+})
+assert(waitCopy?.kind === 'ObjectPick' && waitCopy.type === 'CopyTargetChoice', 'parse Copy')
+
+const waitDmg = parseWaitingFor({
+  type: 'DamageSourceChoice',
+  data: { player: 0, options: [300, 301] },
+})
+assert(waitDmg?.kind === 'ObjectPick' && !waitDmg.allowSkip, 'parse DamageSource')
+assert(buildChooseDamageSource('300').type === 'ChooseDamageSource', 'ChooseDamageSource')
+
+assert(derivedEngineStops(waitCrew, 'main1').has('main1'), 'rail crew')
+assert(derivedEngineStops(waitTgt, 'main1').has('main1'), 'rail target step')
+assert(typeof summarizeCostLabel({ type: 'Tap' }) === 'string', 'cost label')
+
 
 console.log('phaseStateView.selftest + engineInteraction: ok')
