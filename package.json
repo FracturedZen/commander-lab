@@ -1,7 +1,7 @@
 {
   "name": "commander-lab",
   "private": true,
-  "version": "0.7.7",
+  "version": "0.7.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
     "test:rules": "npx --yes tsx scripts/moveLegality.selftest.ts",
     "test:goldfish": "echo \"Run Headless goldfish from /engine in the browser\"",
     "test:phase-view": "npx --yes tsx scripts/phaseStateView.selftest.ts",
+    "test:legal-submit": "npx --yes tsx scripts/assertLegalSubmit.selftest.ts",
     "postbuild": "cp dist/index.html dist/404.html && touch dist/.nojekyll"
   },
   "dependencies": {

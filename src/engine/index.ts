@@ -81,3 +81,13 @@ export {
 export type { EngineSaveRecord } from './engineSave'
 export { matchAdviceToGlows } from './coachGlow'
 export type { CoachGlowMatch } from './coachGlow'
+
+export {
+  assertActionSubmittable,
+  isActionSubmittable,
+  canonicalizeActionKey,
+  collectLegalActionPool,
+  actionInLegalPool,
+  waitingAllowsActionType,
+  waitingForType,
+} from './assertLegalSubmit'

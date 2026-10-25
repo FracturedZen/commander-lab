@@ -168,7 +168,7 @@ export async function runHeadlessGoldfish(opts: {
           null
       }
       try {
-        if (proposal) adapter.submitAction(proposal, priority)
+        if (proposal) adapter.submitAction(proposal, priority, { skipLegalGate: true })
         else adapter.passPriority(priority)
       } catch (err) {
         try {

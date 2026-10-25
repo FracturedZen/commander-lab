@@ -7,6 +7,7 @@ import {
   isPhaseWasmCached,
 } from './phaseBootWorker'
 import { yieldForPaint, yieldToMain } from './bootYield'
+import { assertActionSubmittable } from './assertLegalSubmit'
 import type {
   EngineStatus,
   PhaseAiProposal,
@@ -257,8 +258,29 @@ export class PhaseAdapter {
     }
   }
 
-  submitAction(action: PhaseGameAction, actor: number = this.viewerId): PhaseSubmitResult {
+  /**
+   * Submit a game action. By default enforces the Engine legal gate:
+   * action must match current get_legal_actions* (payment_mode-tolerant for
+   * cast/activate) or be a WaitingFor response type for the current
+   * waiting_for, or Concede. Phase WASM still rejects anything illegal.
+   * Pass `{ skipLegalGate: true }` only for trusted Phase AI proposals when
+   * the client allowlist is intentionally bypassed (rare).
+   */
+  submitAction(
+    action: PhaseGameAction,
+    actor: number = this.viewerId,
+    opts: { skipLegalGate?: boolean } = {},
+  ): PhaseSubmitResult {
     if (!this.wasm) throw new Error('Phase not booted')
+    if (!opts.skipLegalGate) {
+      const legal = this.getLegalActions(actor)
+      const state = unwrapStateEnvelope(this.getState(actor))
+      assertActionSubmittable(action, {
+        legal,
+        waitingRaw: state.waiting_for,
+        allowConcede: true,
+      })
+    }
     return unwrapAction(this.wasm.submit_action(actor, action))
   }
 
@@ -346,7 +368,10 @@ export class PhaseAdapter {
         try {
           results.push(
             proposal
-              ? this.submitAction(proposal, priority)
+              ? this.submitAction(proposal, priority, {
+                  // Phase AI proposals are engine-authored; WASM still rejects.
+                  skipLegalGate: true,
+                })
               : this.passPriority(priority),
           )
         } catch {
