@@ -94,6 +94,10 @@ export type PhaseWasmModule = {
   legal_targets_for_castables_js?: (objectIds: unknown) => unknown
   preview_mana_payment_js?: (actor: number, action: unknown) => unknown
   clear_game_state: () => void
+  export_game_state_json?: () => string
+  restore_game_state?: (json: string) => void
+  resume_restored_game_state?: () => unknown
+  set_multiplayer_mode?: (enabled: boolean) => void
   getFormatRegistry: () => unknown
   take_last_panic_message?: () => string | null
 }

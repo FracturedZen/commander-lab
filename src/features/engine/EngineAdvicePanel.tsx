@@ -1,20 +1,32 @@
 import { Link } from 'react-router-dom'
 import type { AdviceResult } from '@/lib/ai/openrouter'
+import type { CoachGlowMatch } from '@/engine/coachGlow'
 
 type Props = {
   open: boolean
   loading: boolean
   result: AdviceResult | null
+  matches?: CoachGlowMatch[]
+  focusedKey?: string | null
   onClose: () => void
   onRefresh: () => void
+  /** Highlight matching board glows — never submits. */
+  onFocusMatch?: (match: CoachGlowMatch) => void
+}
+
+function matchKey(m: CoachGlowMatch): string {
+  return m.objectIds.join(',') + '|' + m.actionTypes.join(',')
 }
 
 export function EngineAdvicePanel({
   open,
   loading,
   result,
+  matches = [],
+  focusedKey = null,
   onClose,
   onRefresh,
+  onFocusMatch,
 }: Props) {
   if (!open) return null
 
@@ -36,7 +48,8 @@ export function EngineAdvicePanel({
           <div>
             <p className="text-sm font-semibold text-slate-100">Coach advice</p>
             <p className="text-[10px] text-slate-500">
-              Informational only — never auto-submits. Confirm via glow / Pass.
+              Informational only — never auto-submits. Tap a match to glow the
+              board; confirm via Pass / legal actions.
             </p>
           </div>
           <button
@@ -57,7 +70,7 @@ export function EngineAdvicePanel({
           )}
 
           {!loading && result && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
                 <span
                   className={
@@ -83,6 +96,41 @@ export function EngineAdvicePanel({
               <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-slate-200">
                 {result.text}
               </pre>
+              {matches.length > 0 && onFocusMatch ? (
+                <div className="space-y-1.5 rounded-lg border border-violet-500/30 bg-violet-950/30 p-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-200/80">
+                    Matched legal glows — tap to highlight
+                  </p>
+                  <div className="flex flex-col gap-1">
+                    {matches.map((m) => {
+                      const key = matchKey(m)
+                      const active = focusedKey === key
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => onFocusMatch(m)}
+                          className={
+                            active
+                              ? 'rounded-md bg-violet-600 px-2 py-2 text-left text-xs text-white ring-2 ring-violet-300'
+                              : 'rounded-md bg-slate-900 px-2 py-2 text-left text-xs text-violet-100 ring-1 ring-violet-700/40 hover:bg-slate-800'
+                          }
+                        >
+                          {m.label}
+                          <span className="mt-0.5 block text-[10px] text-violet-200/60">
+                            {m.objectIds.length
+                              ? `${m.objectIds.length} object${m.objectIds.length === 1 ? '' : 's'}`
+                              : 'action type'}
+                            {m.actionTypes.length
+                              ? ` · ${m.actionTypes.slice(0, 2).join(', ')}`
+                              : ''}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
 

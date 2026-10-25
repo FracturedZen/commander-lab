@@ -412,6 +412,31 @@ export class PhaseAdapter {
   clear(): void {
     this.wasm?.clear_game_state()
   }
+
+  /** Opaque Phase snapshot for IDB mid-game save (single-player). */
+  exportGameStateJson(): string {
+    if (!this.wasm?.export_game_state_json) {
+      throw new Error('Phase export_game_state_json unavailable')
+    }
+    return this.wasm.export_game_state_json()
+  }
+
+  /**
+   * Restore a saved SP snapshot then drive stack automation.
+   * Forces multiplayer off so restore is accepted.
+   */
+  restoreAndResume(stateJson: string): unknown {
+    if (!this.wasm) throw new Error('Phase not booted')
+    if (!this.wasm.restore_game_state) {
+      throw new Error('Phase restore_game_state unavailable')
+    }
+    this.wasm.set_multiplayer_mode?.(false)
+    this.wasm.restore_game_state(stateJson)
+    if (this.wasm.resume_restored_game_state) {
+      return this.wasm.resume_restored_game_state()
+    }
+    return null
+  }
 }
 
 let singleton: PhaseAdapter | null = null

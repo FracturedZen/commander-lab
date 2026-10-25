@@ -2,6 +2,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { CardRef } from '@/types/card'
 import type { Deck } from '@/types/deck'
 import type { TableSessionRecord } from '@/types/game'
+import type { EngineSaveRecord } from '@/engine/engineSave'
 
 export type StoredCardRow = CardRef & { nameNorm: string }
 
@@ -38,10 +39,15 @@ export interface CommanderLabDB extends DBSchema {
     key: string
     value: { key: string; blob: Blob; updatedAt: number }
   }
+  engineSaves: {
+    key: string
+    value: EngineSaveRecord
+    indexes: { 'by-updated': number }
+  }
 }
 
 const DB_NAME = 'commander-lab'
-const DB_VERSION = 4
+const DB_VERSION = 5
 
 let dbPromise: Promise<IDBPDatabase<CommanderLabDB>> | null = null
 
@@ -101,6 +107,10 @@ export function getDb(): Promise<IDBPDatabase<CommanderLabDB>> {
             db.deleteObjectStore('cardMeta')
             db.createObjectStore('cardMeta', { keyPath: 'key' })
           }
+        }
+        if (oldVersion < 5 && !db.objectStoreNames.contains('engineSaves')) {
+          const saves = db.createObjectStore('engineSaves', { keyPath: 'id' })
+          saves.createIndex('by-updated', 'savedAt')
         }
       },
     })

@@ -110,12 +110,38 @@ textarea {
   z-index: 2;
 }
 
+.card-chip--advice {
+  box-shadow:
+    0 0 0 2px rgb(167 139 250 / 0.95),
+    0 0 16px 3px rgb(139 92 246 / 0.6);
+  animation: card-chip-advice-pulse 1.4s ease-in-out infinite;
+}
+@keyframes card-chip-advice-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px rgb(167 139 250 / 0.95),
+      0 0 16px 3px rgb(139 92 246 / 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgb(196 181 253 / 1),
+      0 0 22px 5px rgb(139 92 246 / 0.75);
+  }
+}
+
+
 @media (prefers-reduced-motion: reduce) {
   .card-chip--target,
   .card-chip--mana,
-  .card-chip--combat {
+  .card-chip--combat,
+  .card-chip--advice {
     transition: none;
   }
+  .card-chip--advice {
+    animation: none;
+  }
+
 }
 
 .card-chip--legal-cursor {

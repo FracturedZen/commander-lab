@@ -68,3 +68,16 @@ export {
   MANA_PIP_CLASS,
 } from './phaseGameLog'
 export type { PhaseLogLine, PhaseGameLogEntry, PhaseManaCounts } from './phaseGameLog'
+
+export {
+  putEngineSave,
+  getEngineSave,
+  deleteEngineSave,
+  listEngineSaves,
+  saveCompatibleWithBoot,
+  formatSaveStamp,
+  ENGINE_SAVE_SLOT,
+} from './engineSave'
+export type { EngineSaveRecord } from './engineSave'
+export { matchAdviceToGlows } from './coachGlow'
+export type { CoachGlowMatch } from './coachGlow'

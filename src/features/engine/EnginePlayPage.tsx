@@ -11,9 +11,15 @@ import {
   mergeLogLines,
   buildConcedeAction,
   BOOT_STAGE_LABELS,
+  putEngineSave,
+  getEngineSave,
+  deleteEngineSave,
+  saveCompatibleWithBoot,
+  formatSaveStamp,
   type BootProgress,
   type BootStage,
   type EngineStatus,
+  type EngineSaveRecord,
   type GoldfishResult,
   type PhaseGameAction,
   type PhaseDeckList,
@@ -124,6 +130,8 @@ export function EnginePlayPage() {
   const [fallbackBanner, setFallbackBanner] = useState<string | null>(null)
   const [setupOpen, setSetupOpen] = useState(true)
   const [startNote, setStartNote] = useState<string | null>(null)
+  const [savedGame, setSavedGame] = useState<EngineSaveRecord | null>(null)
+  const [saveNote, setSaveNote] = useState<string | null>(null)
   const lastDeckList = useRef<PhaseDeckList | null>(null)
   const lastPlayerCount = useRef<number>(2)
   const logEndRef = useRef<HTMLDivElement | null>(null)
@@ -410,6 +418,143 @@ export function EnginePlayPage() {
       setStartNote((n) => (n ? `${n} · conceded` : 'Conceded'))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const refreshSaved = useCallback(async () => {
+    try {
+      const s = await getEngineSave()
+      setSavedGame(s ?? null)
+    } catch {
+      setSavedGame(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshSaved()
+  }, [refreshSaved])
+
+  const saveMidgame = async () => {
+    if (!board) {
+      setSaveNote('Nothing to save — start a game first')
+      return
+    }
+    setBusy(true)
+    setSaveNote(null)
+    try {
+      const hash = adapter.getCardHash()
+      if (!hash) throw new Error('Card-data hash unknown — Boot Phase first')
+      const deckList = lastDeckList.current
+      if (!deckList) throw new Error('No deck list on this table — cannot resume later')
+      const stateJson = adapter.exportGameStateJson()
+      if (!stateJson || stateJson.length < 8) {
+        throw new Error('Phase returned empty export_game_state_json')
+      }
+      const n = lastPlayerCount.current || playerCount
+      const record = await putEngineSave({
+        cardDataHash: hash,
+        playerCount: n,
+        deckList,
+        humanDeckId: humanDeckId || undefined,
+        aiDeckIds: aiDeckIds.slice(0, Math.max(0, n - 1)),
+        stateJson,
+        label: `${n}p · turn ${board.turnNumber}`,
+        turnNumber: board.turnNumber,
+        phaseRaw: board.phaseRaw,
+      })
+      setSavedGame(record)
+      setSaveNote(`Saved mid-game · ${formatSaveStamp(record.savedAt)}`)
+      pushLog(
+        `Saved mid-game (${(stateJson.length / 1024).toFixed(0)} KB) · turn ${board.turnNumber}`,
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setSaveNote(`Save failed: ${msg}`)
+      pushLog(`Save failed: ${msg}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const resumeSaved = async () => {
+    setBusy(true)
+    setSaveNote(null)
+    setAiBusy(true)
+    try {
+      const save = savedGame ?? (await getEngineSave())
+      if (!save) {
+        setSaveNote('No mid-game save in IndexedDB')
+        return
+      }
+      if (!saveCompatibleWithBoot(save)) {
+        const cur = adapter.getCardHash() ?? '(boot first)'
+        setSaveNote(
+          `Save card-data ${save.cardDataHash} ≠ boot ${cur} — clear save or re-sync Phase CDN`,
+        )
+        pushLog(`Resume blocked: card-data hash mismatch`)
+        return
+      }
+      if (!adapter.isReady) {
+        await boot()
+        if (!adapter.isReady) return
+      }
+      const curHash = adapter.getCardHash()
+      if (curHash && curHash !== save.cardDataHash) {
+        setSaveNote(
+          `Save card-data ${save.cardDataHash} ≠ boot ${curHash}`,
+        )
+        return
+      }
+      lastDeckList.current = save.deckList
+      lastPlayerCount.current = save.playerCount
+      setPlayerCount(save.playerCount)
+      writeLs(LS_SEATS, String(save.playerCount))
+      if (save.humanDeckId) {
+        setHumanDeckId(save.humanDeckId)
+        writeLs(LS_HUMAN, save.humanDeckId)
+      }
+      if (save.aiDeckIds?.length) {
+        setAiDeckIds(save.aiDeckIds)
+        writeLs(LS_AI_SEATS, JSON.stringify(save.aiDeckIds))
+        if (save.aiDeckIds[0]) writeLs(LS_AI, save.aiDeckIds[0])
+      }
+      setGameLog([])
+      const resumed = adapter.restoreAndResume(save.stateJson)
+      if (resumed) ingestResults([resumed])
+      pushLog(
+        `Resumed mid-game · ${save.label ?? 'save'} · ${formatSaveStamp(save.savedAt)}`,
+      )
+      setStartNote(
+        `Resumed · ${save.label ?? 'mid-game'} · ${formatSaveStamp(save.savedAt)}`,
+      )
+      const driven = adapter.driveOpponents({
+        maxSteps: 40 + (save.playerCount - 2) * 30,
+      })
+      if (driven.results.length) ingestResults(driven.results)
+      if (driven.steps)
+        pushLog(`Post-resume AI ${driven.steps} steps (${driven.stoppedReason})`)
+      await syncFromEngine()
+      setSetupOpen(false)
+      setLogOpen(true)
+      setSavedGame(save)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setSaveNote(`Resume failed: ${msg}`)
+      pushLog(`Resume failed: ${msg}`)
+    } finally {
+      setAiBusy(false)
+      setBusy(false)
+    }
+  }
+
+  const clearSaved = async () => {
+    try {
+      await deleteEngineSave()
+      setSavedGame(null)
+      setSaveNote('Cleared mid-game save')
+      pushLog('Cleared mid-game save')
+    } catch (err) {
+      setSaveNote(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -821,6 +966,32 @@ export function EnginePlayPage() {
                 Rematch
               </button>
             )}
+            {savedGame && (
+              <button
+                type="button"
+                disabled={busy || !decksReady}
+                onClick={() => void resumeSaved()}
+                className="min-h-11 rounded-md bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+                title={
+                  saveCompatibleWithBoot(savedGame)
+                    ? `Resume · ${formatSaveStamp(savedGame.savedAt)}`
+                    : 'Card-data hash mismatch — may fail'
+                }
+              >
+                Resume
+                {savedGame.turnNumber != null ? ` T${savedGame.turnNumber}` : ''}
+              </button>
+            )}
+            {savedGame && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void clearSaved()}
+                className="min-h-11 rounded-md bg-slate-800 px-3 py-2 text-xs font-medium text-slate-300 ring-1 ring-slate-600 hover:bg-slate-700 disabled:opacity-50"
+              >
+                Clear save
+              </button>
+            )}
             <button
               type="button"
               disabled={busy}
@@ -830,6 +1001,18 @@ export function EnginePlayPage() {
               Headless goldfish
             </button>
           </div>
+          {(savedGame || saveNote) && (
+            <p className="mt-2 text-[11px] text-slate-400">
+              {saveNote
+                ? saveNote
+                : savedGame
+                  ? `Saved mid-game · ${savedGame.label ?? ''} · ${formatSaveStamp(savedGame.savedAt)}` +
+                    (saveCompatibleWithBoot(savedGame)
+                      ? ''
+                      : ' · hash mismatch vs current PHASE_CDN')
+                  : null}
+            </p>
+          )}
         </div>
       )}
 
@@ -853,6 +1036,7 @@ export function EnginePlayPage() {
           onPreviewMana={(a) => adapter.previewManaPayment(a, 0)}
           onConcede={() => void concede()}
           onRematch={() => void rematch()}
+          onSave={() => void saveMidgame()}
         />
       )}
 

@@ -98,11 +98,13 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `engineInteraction.ts` | Targeting / combat / mana / discard / mode helpers (display-only) |
 | `phaseGameLog.ts` | ActionResult `log_entries` / events → compact UI lines; mana pool aggregates; Concede builder |
 | `boardAdviceSummary.ts` | Compact live-board text for OpenRouter coach |
+| `engineSave.ts` | IDB mid-game Phase snapshot + deck picks |
+| `coachGlow.ts` | Match coach text → legal object ids / action types |
 | `config.ts` | `ENGINE_MODE`, CDN URLs |
 | `phase-worker.js` | Boot Worker: fetch + `WebAssembly.compile` off main; posts Module + progress |
 | `../features/engine/EngineBoard.tsx` | Arena board + phone sticky action dock (WaitingFor banners + Pass); multi-seat opponent chrome; stack rail, targeting, combat, mana chrome, ActivateAbility, priority banner, command cast+spellCosts, Concede/Rematch |
 
-## How to play (v0.7.6+)
+## How to play (v0.7.7+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** — staged progress (glue → WASM download/compile → instantiate → card-data download/decode/cache → Phase `load_card_database` → ready). **Worker boot** (v0.7.4): `phase-worker.js` fetch + `WebAssembly.compile` off main; main instantiates/binds. **Card-data soft boot** (v0.7.5): CDN already serves **brotli ~7.1 MB** (decoded ~95 MB); chunked UTF-8 decode with `requestIdleCallback` / `scheduler.yield` between 2 MiB slices; IDB stores ArrayBuffer for new downloads (legacy text blobs still count as cached); clear “UI may pause” stage before sync `load_card_database` (cannot split — Phase JSON string API only). No card-data split (Phase has no chunked load). **Cached** badge + “Already cached — instant boot” when SW WASM + IDB card-data warm. **Retry boot** on failure. Start also boots automatically.
@@ -113,11 +115,13 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 7. **Game log** (collapsible) merges Phase `log_entries` from each ActionResult; falls back to summarizing `events` when entries are absent. Phone-friendly; auto-scrolls when open.
 8. **Mana pool** chrome always shows seat 0 `mana_pool` (color pips + counts) on the board and sticky dock — not only during payment.
 9. **Concede** submits Phase `Concede { player_id }` then clears table back to setup. **Rematch** reuses the last deck list via `startGame` (no Boot dance when WASM is already ready).
+10. **Save / Resume** (v0.7.7): in-game **Save** calls Phase `export_game_state_json` and stores the opaque snapshot plus deck picks + `playerCount` + card-data hash in IndexedDB (`engineSaves` / slot `midgame`). Setup **Resume** boots if needed, `set_multiplayer_mode(false)`, `restore_game_state`, then `resume_restored_game_state`, then syncs the board. Hash mismatch vs `PHASE_CDN.cardDataHash` blocks resume. Single-player only (Phase refuses restore in MP). Clear save from setup. Coach never auto-submits.
+11. **Coach → glow** (v0.7.7): after advice, lines that mention current legal card names / action types become tappable matches; tap focuses a violet **advice** glow on matching objects — still never auto-submits.
 
 
 ## Headless / AI
 
-Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) for driving opponent seats / goldfish. **OpenRouter coach** (v0.7.6): Engine **Coach advice** button uses the same Settings → OpenRouter API key + model (`SETTINGS_KEYS.openRouterApiKey` / `openRouterModel`); sends a compact board summary (life, seats, hand names, BF, stack top, waiting_for, legal action labels) and shows a phone-friendly drawer. Advice never auto-submits — human confirms via glow / Pass. No key / offline → local tips + Settings link. Not required for goldfish.
+Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) for driving opponent seats / goldfish. **OpenRouter coach** (v0.7.6+): Engine **Coach advice** button uses the same Settings → OpenRouter API key + model (`SETTINGS_KEYS.openRouterApiKey` / `openRouterModel`); sends a compact board summary (life, seats, hand names, BF, stack top, waiting_for, legal action labels) and shows a phone-friendly drawer. **v0.7.7:** matched lines → tappable violet board glow (legal objects only); never auto-submits — human confirms via glow / Pass. No key / offline → local tips + Settings link. Not required for goldfish.
 
 ## Limits & next work
 
@@ -134,6 +138,7 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) for dri
 - Worker boot + multi-seat seat math (v0.7.4): compile-in-Worker path with main instantiate; cache-instant UX; `playerCountFromDeckList` / empty `ai_decks` on 2p stubs so rematch no longer inflates 2→3; null-seat guards on board view.
 - Soft card-data boot (v0.7.5): chunked decode + idle yields; IDB ArrayBuffer; painted warning before sync `load_card_database`. Wire already br (~7 MB); Phase accepts only JSON string — no gzip-to-WASM / no cheap split.
 - OpenRouter Engine coach (v0.7.6): Coach advice drawer; Settings key reuse; compact summary; no auto-submit.
+- Mid-game Save/Resume + Coach→glow (v0.7.7): Phase `export_game_state_json` / `restore_game_state` / `resume_restored_game_state` → IDB with deck picks + playerCount; setup Resume; coach line matches focus violet glow (no auto-submit).
 - Full game-in-worker / off-main `load_card_database` still blocked. Vote / draft / banding still stubbed.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.
 - Local `build-wasm.sh` may take a long time on the box; CDN path is the supported deploy path.

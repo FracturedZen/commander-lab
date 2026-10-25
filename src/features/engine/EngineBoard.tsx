@@ -9,6 +9,10 @@ import { PhaseRail } from '@/components/PhaseRail'
 import type { PhaseGameAction } from '@/engine'
 import { buildEngineAdviceSummary } from '@/engine/boardAdviceSummary'
 import {
+  matchAdviceToGlows,
+  type CoachGlowMatch,
+} from '@/engine/coachGlow'
+import {
   adviseEnginePlay,
   type AdviceResult,
 } from '@/lib/ai/openrouter'
@@ -145,6 +149,8 @@ type Props = {
   onPreviewMana?: (action: PhaseGameAction) => string[]
   onConcede?: () => void
   onRematch?: () => void
+  /** Persist Phase export_game_state_json + deck picks to IDB. */
+  onSave?: () => void
 }
 
 type UiMode =
@@ -300,6 +306,7 @@ export function EngineBoard({
   onPreviewMana,
   onConcede,
   onRematch,
+  onSave,
 }: Props) {
   const seats = (view.seats ?? []).filter(Boolean)
   const you = seats[0]
@@ -318,6 +325,18 @@ export function EngineBoard({
   const [adviceOpen, setAdviceOpen] = useState(false)
   const [adviceLoading, setAdviceLoading] = useState(false)
   const [adviceResult, setAdviceResult] = useState<AdviceResult | null>(null)
+  const [adviceFocus, setAdviceFocus] = useState<Set<string>>(() => new Set())
+  const [adviceFocusKey, setAdviceFocusKey] = useState<string | null>(null)
+
+  const coachMatches = useMemo((): CoachGlowMatch[] => {
+    if (!adviceResult?.text) return []
+    return matchAdviceToGlows(adviceResult.text, view)
+  }, [adviceResult?.text, view])
+
+  useEffect(() => {
+    setAdviceFocus(new Set())
+    setAdviceFocusKey(null)
+  }, [view.turnNumber, view.phaseRaw, view.priorityPlayer])
 
   const requestAdvice = useCallback(async () => {
     setAdviceOpen(true)
@@ -727,7 +746,7 @@ export function EngineBoard({
 
   function chipGlow(objectId: string): {
     highlighted: boolean
-    glow: 'legal' | 'target' | 'mana' | 'combat'
+    glow: 'legal' | 'target' | 'mana' | 'combat' | 'advice'
     selected: boolean
   } {
     if (manaGlow.has(objectId)) {
@@ -791,6 +810,9 @@ export function EngineBoard({
         return { highlighted: true, glow: 'mana', selected: false }
       }
       return { highlighted: false, glow: 'legal', selected: false }
+    }
+    if (adviceFocus.has(objectId)) {
+      return { highlighted: true, glow: 'advice', selected: false }
     }
     return {
       highlighted: glowing.has(objectId),
@@ -3638,6 +3660,16 @@ export function EngineBoard({
           >
             Coach
           </button>
+          {onSave && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onSave}
+              className="min-h-12 rounded-xl bg-amber-900 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-amber-100 ring-1 ring-amber-700/50 disabled:opacity-40"
+            >
+              Save
+            </button>
+          )}
           {onRematch && (
             <button
               type="button"
@@ -3682,6 +3714,16 @@ export function EngineBoard({
         >
           {adviceLoading ? 'Coach…' : 'Coach advice'}
         </button>
+        {onSave && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onSave}
+            className="rounded bg-amber-900 px-2 py-1 text-xs font-medium text-amber-100 ring-1 ring-amber-700/40 disabled:opacity-40"
+          >
+            Save game
+          </button>
+        )}
         {onRematch && (
           <button
             type="button"
@@ -3801,8 +3843,20 @@ export function EngineBoard({
         open={adviceOpen}
         loading={adviceLoading}
         result={adviceResult}
-        onClose={() => setAdviceOpen(false)}
+        matches={coachMatches}
+        focusedKey={adviceFocusKey}
+        onClose={() => {
+          setAdviceOpen(false)
+          setAdviceFocus(new Set())
+          setAdviceFocusKey(null)
+        }}
         onRefresh={() => void requestAdvice()}
+        onFocusMatch={(m) => {
+          setAdviceFocus(new Set(m.objectIds))
+          setAdviceFocusKey(
+            m.objectIds.join(',') + '|' + m.actionTypes.join(','),
+          )
+        }}
       />
 
     </div>
