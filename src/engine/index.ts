@@ -2,7 +2,8 @@ export { ENGINE_MODE_DEFAULT, ENGINE_SETTINGS_KEY, PHASE_CDN, PHASE_AI_DIFFICULT
 export type { EngineMode } from './config'
 export { PhaseAdapter, getPhaseAdapter } from './PhaseAdapter'
 export { loadPhaseWasm, getCachedPhaseWasm } from './loadPhaseWasm'
-export { loadPhaseCardDataText } from './cardDataCache'
+export { loadPhaseCardDataText, hasCachedPhaseCardData } from './cardDataCache'
+export { yieldToMain, yieldIdle, yieldForPaint } from './bootYield'
 export {
   BOOT_STAGE_LABELS,
   formatBytes,

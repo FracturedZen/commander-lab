@@ -5,8 +5,8 @@ import { stageOverall, type BootProgressCb } from './bootProgress'
 import {
   describeBootCache,
   isPhaseWasmCached,
-  yieldToMain,
 } from './phaseBootWorker'
+import { yieldForPaint, yieldToMain } from './bootYield'
 import type {
   EngineStatus,
   PhaseAiProposal,
@@ -121,25 +121,38 @@ export class PhaseAdapter {
       this.status = { kind: 'loading', detail: 'card-data' }
       await yieldToMain()
       const { text, hash, fromCache } = await loadPhaseCardDataText(onProgress)
+
+      // load_card_database is one sync WASM call (JSON parse + index in Rust).
+      // We cannot split it; paint clear stage text, yield, then accept the hitch.
       onProgress?.({
         stage: 'load-db',
         message: fromCache
-          ? 'Loading cached card database into engine…'
-          : 'Loading card database into engine…',
-        fraction: stageOverall('load-db', 0),
-        stageFraction: 0,
+          ? 'Preparing Phase load_card_database (cached JSON)…'
+          : 'Preparing Phase load_card_database…',
+        fraction: stageOverall('load-db', 0.05),
+        stageFraction: 0.05,
         fromCache,
       })
-      // Sync parse is unavoidably on the main thread (wasm-bindgen instance lives here).
       await yieldToMain()
+      onProgress?.({
+        stage: 'load-db',
+        message:
+          'Phase parsing card-data on main thread — UI may pause briefly (~95 MB JSON)…',
+        fraction: stageOverall('load-db', 0.15),
+        stageFraction: 0.15,
+        fromCache,
+      })
+      await yieldForPaint()
       this.wasm.load_card_database(text)
       this.cardHash = hash
       onProgress?.({
         stage: 'load-db',
-        message: 'Card database loaded',
+        message: 'Card database loaded into Phase',
         fraction: stageOverall('load-db', 1),
         stageFraction: 1,
+        fromCache,
       })
+      await yieldToMain()
 
       const registry = this.wasm.getFormatRegistry() as Array<{
         format: string

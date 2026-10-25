@@ -25,11 +25,11 @@ export type BootProgressCb = (p: BootProgress) => void
 
 /** Rough stage weights for overall fraction. */
 const STAGE_SPAN: Record<Exclude<BootStage, 'error'>, { start: number; end: number }> = {
-  glue: { start: 0, end: 0.05 },
-  wasm: { start: 0.05, end: 0.42 },
-  init: { start: 0.42, end: 0.5 },
-  'card-data': { start: 0.5, end: 0.9 },
-  'load-db': { start: 0.9, end: 0.98 },
+  glue: { start: 0, end: 0.04 },
+  wasm: { start: 0.04, end: 0.36 },
+  init: { start: 0.36, end: 0.42 },
+  'card-data': { start: 0.42, end: 0.78 },
+  'load-db': { start: 0.78, end: 0.98 },
   ready: { start: 1, end: 1 },
 }
 
@@ -37,8 +37,8 @@ export const BOOT_STAGE_LABELS: { stage: BootStage; label: string }[] = [
   { stage: 'glue', label: 'Load glue' },
   { stage: 'wasm', label: 'Download WASM (~39 MB)' },
   { stage: 'init', label: 'Instantiate WASM' },
-  { stage: 'card-data', label: 'Card data (~96 MB)' },
-  { stage: 'load-db', label: 'Load card database' },
+  { stage: 'card-data', label: 'Card data (~7 MB br → ~95 MB)' },
+  { stage: 'load-db', label: 'Phase parse (sync)' },
   { stage: 'ready', label: 'Ready' },
 ]
 

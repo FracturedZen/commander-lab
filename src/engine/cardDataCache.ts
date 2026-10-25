@@ -1,12 +1,16 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { PHASE_CDN } from './config'
 import {
-  bytesToUtf8,
   fetchBytesWithProgress,
   formatBytes,
   stageOverall,
   type BootProgressCb,
 } from './bootProgress'
+import { yieldForPaint, yieldIdle, yieldToMain } from './bootYield'
+
+/** Uncompressed JSON size (~95.4 MiB). Wire is ~7.1 MB brotli from CDN. */
+export const CARD_DATA_DECODED_BYTES = 100_074_660
+export const CARD_DATA_WIRE_BR_BYTES = 7_463_919
 
 interface PhaseCardDb extends DBSchema {
   meta: {
@@ -15,7 +19,7 @@ interface PhaseCardDb extends DBSchema {
   }
   blobs: {
     key: string
-    value: { key: string; text: string }
+    value: { key: string; text?: string; buffer?: ArrayBuffer }
   }
 }
 
@@ -33,11 +37,45 @@ function db() {
   return dbPromise
 }
 
+const DECODE_CHUNK = 2 * 1024 * 1024 // 2 MiB
+
+/**
+ * UTF-8 decode in chunks with idle yields so the UI can paint mid-decode.
+ * Final join still allocates one big string (Phase needs a JSON string).
+ */
+export async function bytesToUtf8Yielding(
+  buf: ArrayBuffer,
+  onChunk?: (decodedBytes: number, totalBytes: number) => void,
+): Promise<string> {
+  const view = new Uint8Array(buf)
+  const total = view.byteLength
+  if (total === 0) return ''
+  // Small payloads: one-shot
+  if (total <= DECODE_CHUNK) {
+    onChunk?.(total, total)
+    return new TextDecoder('utf-8').decode(view)
+  }
+  const decoder = new TextDecoder('utf-8')
+  const parts: string[] = []
+  for (let offset = 0; offset < total; ) {
+    const end = Math.min(offset + DECODE_CHUNK, total)
+    const slice = view.subarray(offset, end)
+    const last = end >= total
+    parts.push(decoder.decode(slice, { stream: !last }))
+    offset = end
+    onChunk?.(offset, total)
+    if (!last) await yieldIdle(32)
+  }
+  await yieldToMain()
+  // join is sync/allocating — caller should have painted "Assembling JSON string…"
+  return parts.join('')
+}
+
 /**
  * Resolve Phase card-data.json text pinned to the WASM build we ship against.
  * Prefer IndexedDB cache matching PHASE_CDN.cardDataHash; otherwise download
- * with byte progress. (Staging card-data-meta.json can point at a newer dump
- * the WASM cannot parse.)
+ * with byte progress. CDN already serves brotli (~7 MB wire → ~95 MB decoded).
+ * Keeps v1 text blobs working for “Already cached — instant”.
  */
 export async function loadPhaseCardDataText(
   onProgress?: BootProgressCb,
@@ -45,56 +83,127 @@ export async function loadPhaseCardDataText(
   const hash = PHASE_CDN.cardDataHash
   const url = PHASE_CDN.cardDataUrl
 
+  await yieldToMain()
   const database = await db()
   const cached = await database.get('meta', 'card-data')
   if (cached?.hash === hash) {
+    onProgress?.({
+      stage: 'card-data',
+      message: 'Reading cached card-data from IndexedDB…',
+      fraction: stageOverall('card-data', 0.05),
+      stageFraction: 0.05,
+      fromCache: true,
+    })
+    await yieldToMain()
     const blob = await database.get('blobs', 'card-data')
     if (blob?.text) {
       onProgress?.({
         stage: 'card-data',
-        message: `Using cached card-data (${hash})`,
+        message: `Cached card-data ready (${hash})`,
         fraction: stageOverall('card-data', 1),
         stageFraction: 1,
         fromCache: true,
       })
+      await yieldForPaint()
       return { text: blob.text, hash, fromCache: true }
+    }
+    if (blob?.buffer && blob.buffer.byteLength > 0) {
+      onProgress?.({
+        stage: 'card-data',
+        message: 'Decoding cached card-data…',
+        fraction: stageOverall('card-data', 0.2),
+        stageFraction: 0.2,
+        fromCache: true,
+        bytesReceived: 0,
+        bytesTotal: blob.buffer.byteLength,
+      })
+      await yieldForPaint()
+      const text = await bytesToUtf8Yielding(blob.buffer, (done, total) => {
+        const stageFraction = 0.2 + 0.75 * (done / total)
+        onProgress?.({
+          stage: 'card-data',
+          message: `Decoding cached card-data… ${formatBytes(done)} / ${formatBytes(total)}`,
+          fraction: stageOverall('card-data', stageFraction),
+          stageFraction,
+          fromCache: true,
+          bytesReceived: done,
+          bytesTotal: total,
+        })
+      })
+      onProgress?.({
+        stage: 'card-data',
+        message: `Cached card-data ready (${hash})`,
+        fraction: stageOverall('card-data', 1),
+        stageFraction: 1,
+        fromCache: true,
+      })
+      await yieldForPaint()
+      return { text, hash, fromCache: true }
     }
   }
 
   onProgress?.({
     stage: 'card-data',
-    message: `Downloading card-data (${hash}, ~96 MB)…`,
+    message: `Downloading card-data (${hash}, ~${formatBytes(CARD_DATA_WIRE_BR_BYTES)} br → ~${formatBytes(CARD_DATA_DECODED_BYTES)})…`,
     fraction: stageOverall('card-data', 0),
     stageFraction: 0,
     bytesReceived: 0,
     bytesTotal: null,
   })
+  await yieldForPaint()
 
   const bytes = await fetchBytesWithProgress(url, (received, total) => {
-    const stageFraction = total && total > 0 ? Math.min(1, received / total) : 0
+    // Browser decompresses br; content-length is often the compressed size.
+    // Prefer decoded progress when received exceeds declared total.
+    const displayTotal =
+      total && received <= total * 1.05 ? total : CARD_DATA_DECODED_BYTES
+    const stageFraction = Math.min(0.55, (received / displayTotal) * 0.55)
     onProgress?.({
       stage: 'card-data',
       message:
-        total && total > 0
-          ? `Downloading card-data… ${formatBytes(received)} / ${formatBytes(total)}`
-          : `Downloading card-data… ${formatBytes(received)}`,
-      fraction: stageOverall('card-data', stageFraction || (received > 0 ? 0.5 : 0)),
+        total && received <= total * 1.05
+          ? `Downloading card-data… ${formatBytes(received)} / ${formatBytes(total)} (wire; br)`
+          : `Downloading card-data… ${formatBytes(received)} decoded`,
+      fraction: stageOverall('card-data', stageFraction || (received > 0 ? 0.15 : 0)),
       stageFraction: stageFraction || undefined,
       bytesReceived: received,
+      bytesTotal: displayTotal,
+    })
+  })
+
+  onProgress?.({
+    stage: 'card-data',
+    message: 'Decoding card-data JSON (chunked)…',
+    fraction: stageOverall('card-data', 0.58),
+    stageFraction: 0.58,
+    bytesReceived: 0,
+    bytesTotal: bytes.byteLength,
+  })
+  await yieldForPaint()
+
+  const text = await bytesToUtf8Yielding(bytes, (done, total) => {
+    const stageFraction = 0.58 + 0.3 * (done / total)
+    onProgress?.({
+      stage: 'card-data',
+      message: `Decoding card-data… ${formatBytes(done)} / ${formatBytes(total)}`,
+      fraction: stageOverall('card-data', stageFraction),
+      stageFraction,
+      bytesReceived: done,
       bytesTotal: total,
     })
   })
 
-  const text = bytesToUtf8(bytes)
   onProgress?.({
     stage: 'card-data',
-    message: 'Caching card-data in IndexedDB…',
-    fraction: stageOverall('card-data', 0.95),
-    stageFraction: 0.95,
+    message: 'Caching card-data in IndexedDB (binary)…',
+    fraction: stageOverall('card-data', 0.92),
+    stageFraction: 0.92,
     bytesReceived: bytes.byteLength,
     bytesTotal: bytes.byteLength,
   })
-  await database.put('blobs', { key: 'card-data', text })
+  await yieldToMain()
+  // Store ArrayBuffer (not the huge JS string) for cheaper IDB writes / future reads.
+  await database.put('blobs', { key: 'card-data', buffer: bytes })
   await database.put('meta', {
     key: 'card-data',
     hash,
@@ -107,6 +216,7 @@ export async function loadPhaseCardDataText(
     fraction: stageOverall('card-data', 1),
     stageFraction: 1,
   })
+  await yieldForPaint()
   return { text, hash, fromCache: false }
 }
 
@@ -117,7 +227,7 @@ export async function hasCachedPhaseCardData(): Promise<boolean> {
     const cached = await database.get('meta', 'card-data')
     if (cached?.hash !== PHASE_CDN.cardDataHash) return false
     const blob = await database.get('blobs', 'card-data')
-    return Boolean(blob?.text)
+    return Boolean(blob?.text || (blob?.buffer && blob.buffer.byteLength > 0))
   } catch {
     return false
   }

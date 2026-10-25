@@ -130,15 +130,7 @@ export async function isPhaseWasmCached(
   }
 }
 
-export function yieldToMain(): Promise<void> {
-  const sched = (
-    globalThis as unknown as {
-      scheduler?: { yield?: () => Promise<void> }
-    }
-  ).scheduler
-  if (sched?.yield) return sched.yield()
-  return new Promise((resolve) => setTimeout(resolve, 0))
-}
+export { yieldToMain, yieldIdle, yieldForPaint } from './bootYield'
 
 export function describeBootCache(opts: {
   wasmCached: boolean

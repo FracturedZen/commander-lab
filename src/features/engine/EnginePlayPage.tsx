@@ -611,7 +611,7 @@ export function EnginePlayPage() {
                 </span>
               </p>
               <span className="text-[10px] text-slate-500">
-                WASM + card-data cached after first success (SW / IndexedDB)
+                WASM + card-data cached after first success (SW / IndexedDB). Card-data wire ~7 MB br; Phase parse stays on main.
               </span>
             </div>
             <ol className="mt-2 grid gap-1 sm:grid-cols-3">

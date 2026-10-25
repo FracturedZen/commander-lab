@@ -9,8 +9,8 @@ import {
   bootWorkerUnavailable,
   compileWasmInWorker,
   isPhaseWasmCached,
-  yieldToMain,
 } from './phaseBootWorker'
+import { yieldToMain } from './bootYield'
 import type { PhaseWasmModule } from './types'
 
 let cached: PhaseWasmModule | null = null
