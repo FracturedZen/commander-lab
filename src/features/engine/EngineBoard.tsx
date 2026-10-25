@@ -114,6 +114,12 @@ import {
   multiTargetReady,
   selectedContributionTotal,
 } from '@/engine/engineInteraction'
+import {
+  aggregateManaPool,
+  manaCountsEntries,
+  MANA_PIP_GLYPH,
+  MANA_PIP_CLASS,
+} from '@/engine/phaseGameLog'
 
 type Props = {
   view: PhaseBoardView
@@ -124,6 +130,8 @@ type Props = {
   onDriveAi: () => void
   /** Optional Auto-payment source preview (object ids). */
   onPreviewMana?: (action: PhaseGameAction) => string[]
+  onConcede?: () => void
+  onRematch?: () => void
 }
 
 type UiMode =
@@ -277,6 +285,8 @@ export function EngineBoard({
   onSubmitChain,
   onDriveAi,
   onPreviewMana,
+  onConcede,
+  onRematch,
 }: Props) {
   const you = view.seats[0]
   const opp = view.seats[1]
@@ -1405,6 +1415,42 @@ export function EngineBoard({
             </button>
           )
         })}
+      </div>
+    )
+  }
+
+
+  function manaPoolReadout() {
+    const counts = aggregateManaPool(you.manaPool)
+    const rows = manaCountsEntries(counts)
+    return (
+      <div
+        className="flex flex-wrap items-center gap-1 rounded-lg border border-amber-500/25 bg-black/45 px-2 py-1"
+        title="Your mana pool (Phase mana_pool)"
+      >
+        <span className="text-[9px] font-semibold uppercase tracking-wider text-amber-200/60">
+          Mana
+        </span>
+        {rows.length === 0 ? (
+          <span className="text-[10px] tabular-nums text-emerald-100/35">empty</span>
+        ) : (
+          rows.map(({ color, count }) => (
+            <span
+              key={color}
+              className={[
+                'inline-flex min-w-[1.35rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums',
+                MANA_PIP_CLASS[color] ?? 'bg-slate-700 text-slate-100',
+              ].join(' ')}
+              title={`${count}× ${color}`}
+            >
+              {MANA_PIP_GLYPH[color] ?? color[0] ?? '?'}
+              {count > 1 ? count : ''}
+            </span>
+          ))
+        )}
+        {counts.total > 0 && (
+          <span className="text-[9px] tabular-nums text-amber-100/45">{counts.total}</span>
+        )}
       </div>
     )
   }
@@ -3058,7 +3104,10 @@ export function EngineBoard({
           </span>
         </div>
       )}
-      <div className="hidden sm:block">{paymentBar}</div>
+      <div className="hidden items-center gap-3 sm:flex">
+        {paymentBar}
+        {manaPoolReadout()}
+      </div>
       <div className="hidden sm:block">{modeBanner}</div>
 
       <div
@@ -3165,6 +3214,7 @@ export function EngineBoard({
                 poison={you.poison}
                 commanderDamage={you.commanderDamage}
               />
+              {manaPoolReadout()}
             </div>
 
             <div className="flex min-h-[7.5rem] flex-wrap items-end justify-center gap-1 pb-1">
@@ -3287,7 +3337,10 @@ export function EngineBoard({
 
       {/* Sticky bottom chrome: wizards + Pass stay reachable on narrow screens */}
       <div className="sticky bottom-0 z-30 -mx-2 border-t border-slate-700/80 bg-slate-950/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_rgba(0,0,0,0.45)] backdrop-blur-md sm:hidden">
-        <div className="mb-2">{paymentBar}</div>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          {paymentBar}
+          {manaPoolReadout()}
+        </div>
         {modeBanner ? (
           <div className="mb-2 max-h-[36vh] overflow-y-auto overscroll-contain">
             {modeBanner}
@@ -3314,6 +3367,26 @@ export function EngineBoard({
           >
             AI
           </button>
+          {onRematch && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onRematch}
+              className="min-h-12 rounded-xl bg-emerald-900 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-100 ring-1 ring-emerald-700/50 disabled:opacity-40"
+            >
+              Rematch
+            </button>
+          )}
+          {onConcede && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onConcede}
+              className="min-h-12 rounded-xl bg-rose-950 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-rose-100 ring-1 ring-rose-700/50 disabled:opacity-40"
+            >
+              Concede
+            </button>
+          )}
         </div>
       </div>
 
@@ -3330,6 +3403,26 @@ export function EngineBoard({
         >
           AI step
         </button>
+        {onRematch && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onRematch}
+            className="rounded bg-emerald-900 px-2 py-1 text-xs font-medium text-emerald-100 ring-1 ring-emerald-700/40 disabled:opacity-40"
+          >
+            Rematch
+          </button>
+        )}
+        {onConcede && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onConcede}
+            className="rounded bg-rose-950 px-2 py-1 text-xs font-medium text-rose-100 ring-1 ring-rose-700/40 disabled:opacity-40"
+          >
+            Concede
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setShowAllActions((v) => !v)}

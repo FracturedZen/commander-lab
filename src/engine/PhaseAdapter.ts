@@ -57,11 +57,31 @@ function unwrapPreviewIds(raw: unknown): string[] {
 function unwrapAction(raw: unknown): PhaseSubmitResult {
   if (typeof raw === 'string') throw new Error(raw)
   if (!raw || typeof raw !== 'object') return { result: raw }
-  const r = raw as PhaseSubmitResult
+  const r = raw as PhaseSubmitResult & Record<string, unknown>
   if (r.status === 'rejected') {
     throw new Error(r.rejection?.message || 'Action rejected by Phase engine')
   }
-  return r
+  // Flatten ActionResult fields onto the envelope when nested under `result`.
+  const nested =
+    r.result && typeof r.result === 'object' && !Array.isArray(r.result)
+      ? (r.result as Record<string, unknown>)
+      : null
+  const events =
+    (Array.isArray(r.events) && r.events) ||
+    (nested && Array.isArray(nested.events) && nested.events) ||
+    undefined
+  const log_entries =
+    (Array.isArray(r.log_entries) && r.log_entries) ||
+    (Array.isArray((r as { logEntries?: unknown }).logEntries) &&
+      (r as { logEntries?: unknown[] }).logEntries) ||
+    (nested && Array.isArray(nested.log_entries) && nested.log_entries) ||
+    (nested && Array.isArray(nested.logEntries) && nested.logEntries) ||
+    undefined
+  return {
+    ...r,
+    ...(events ? { events } : {}),
+    ...(log_entries ? { log_entries } : {}),
+  }
 }
 
 /**
@@ -196,15 +216,16 @@ export class PhaseAdapter {
     humanId?: number
     maxSteps?: number
     difficulty?: string
-  } = {}): { steps: number; stoppedReason: string } {
+  } = {}): { steps: number; stoppedReason: string; results: PhaseSubmitResult[] } {
     const humanId = opts.humanId ?? this.viewerId
     const maxSteps = opts.maxSteps ?? 80
     const difficulty = opts.difficulty ?? PHASE_AI_DIFFICULTY
     let steps = 0
+    const results: PhaseSubmitResult[] = []
 
     while (steps < maxSteps) {
       const state = unwrapStateEnvelope(this.getState(humanId))
-      if (state.game_over) return { steps, stoppedReason: 'game_over' }
+      if (state.game_over) return { steps, stoppedReason: 'game_over', results }
 
       const legal = this.getLegalActions(humanId)
       // If human has meaningful choices beyond auto-pass, stop.
@@ -226,11 +247,11 @@ export class PhaseAdapter {
         0
 
       if (priority === humanId && !onlyPass && humanActions.length > 0) {
-        return { steps, stoppedReason: 'human_to_act' }
+        return { steps, stoppedReason: 'human_to_act', results }
       }
 
       if (priority === humanId && onlyPass && humanActions.some((a) => a.type === 'PassPriority')) {
-        this.passPriority(humanId)
+        results.push(this.passPriority(humanId))
         steps++
         continue
       }
@@ -251,15 +272,21 @@ export class PhaseAdapter {
             null
         }
         try {
-          if (proposal) this.submitAction(proposal, priority)
-          else this.passPriority(priority)
+          results.push(
+            proposal
+              ? this.submitAction(proposal, priority)
+              : this.passPriority(priority),
+          )
         } catch {
           try {
             const la = this.getLegalActions(priority)
-            if (la.actions[0]) this.submitAction(la.actions[0], priority)
-            else this.passPriority(priority)
+            results.push(
+              la.actions[0]
+                ? this.submitAction(la.actions[0], priority)
+                : this.passPriority(priority),
+            )
           } catch {
-            return { steps, stoppedReason: 'ai_stuck' }
+            return { steps, stoppedReason: 'ai_stuck', results }
           }
         }
         steps++
@@ -268,13 +295,13 @@ export class PhaseAdapter {
 
       // Human auto-pass with empty list — try pass anyway
       try {
-        this.passPriority(humanId)
+        results.push(this.passPriority(humanId))
         steps++
       } catch {
-        return { steps, stoppedReason: 'human_to_act' }
+        return { steps, stoppedReason: 'human_to_act', results }
       }
     }
-    return { steps, stoppedReason: 'step_limit' }
+    return { steps, stoppedReason: 'step_limit', results }
   }
 
 

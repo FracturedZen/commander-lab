@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { Link } from 'react-router-dom'
 import {
   getPhaseAdapter,
@@ -6,9 +6,15 @@ import {
   goldfishStubDecks,
   sanitizePhasePlayer,
   toPhaseDeckList,
+  linesFromActionPayload,
+  mergeLogLines,
+  buildConcedeAction,
   type EngineStatus,
   type GoldfishResult,
   type PhaseGameAction,
+  type PhaseDeckList,
+  type PhaseLogLine,
+  type PhaseSubmitResult,
 } from '@/engine'
 import {
   buildPhaseBoardView,
@@ -49,6 +55,20 @@ function writeLs(key: string, value: string) {
   }
 }
 
+function appendPhaseResults(
+  setGameLog: Dispatch<SetStateAction<PhaseLogLine[]>>,
+  payloads: unknown[],
+) {
+  if (!payloads.length) return
+  setGameLog((prev) => {
+    let next = prev
+    for (const p of payloads) {
+      next = mergeLogLines(next, linesFromActionPayload(p))
+    }
+    return next
+  })
+}
+
 export function EnginePlayPage() {
   const adapter = useMemo(() => getPhaseAdapter(), [])
   const [status, setStatus] = useState<EngineStatus>({ kind: 'idle' })
@@ -58,12 +78,16 @@ export function EnginePlayPage() {
   const [humanDeckId, setHumanDeckId] = useState<string>(() => readLs(LS_HUMAN))
   const [aiDeckId, setAiDeckId] = useState<string>(() => readLs(LS_AI))
   const [board, setBoard] = useState<PhaseBoardView | null>(null)
-  const [log, setLog] = useState<string[]>([])
+  const [clientLog, setClientLog] = useState<string[]>([])
+  const [gameLog, setGameLog] = useState<PhaseLogLine[]>([])
+  const [logOpen, setLogOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [goldfish, setGoldfish] = useState<GoldfishResult | null>(null)
   const [fallbackBanner, setFallbackBanner] = useState<string | null>(null)
   const [setupOpen, setSetupOpen] = useState(true)
   const [startNote, setStartNote] = useState<string | null>(null)
+  const lastDeckList = useRef<PhaseDeckList | null>(null)
+  const logEndRef = useRef<HTMLDivElement | null>(null)
 
   const refreshDecks = useCallback(async () => {
     await installSampleDecks()
@@ -90,6 +114,10 @@ export function EnginePlayPage() {
     void refreshDecks()
   }, [refreshDecks])
 
+  useEffect(() => {
+    if (logOpen) logEndRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [gameLog, logOpen])
+
   const pickHuman = (id: string) => {
     setHumanDeckId(id)
     writeLs(LS_HUMAN, id)
@@ -100,7 +128,11 @@ export function EnginePlayPage() {
   }
 
   const pushLog = (line: string) =>
-    setLog((prev) => [`${new Date().toLocaleTimeString()} ${line}`, ...prev].slice(0, 80))
+    setClientLog((prev) => [`${new Date().toLocaleTimeString()} ${line}`, ...prev].slice(0, 80))
+
+  const ingestResults = useCallback((payloads: unknown[]) => {
+    appendPhaseResults(setGameLog, payloads)
+  }, [])
 
   const syncFromEngine = useCallback(async () => {
     try {
@@ -118,6 +150,33 @@ export function EnginePlayPage() {
       pushLog(`sync error: ${err instanceof Error ? err.message : String(err)}`)
     }
   }, [adapter])
+
+  const buildDeckList = useCallback((): PhaseDeckList => {
+    const human =
+      humanDeckId === STUB_DECK_ID
+        ? null
+        : decks.find((d) => d.id === humanDeckId) ?? null
+    const ai =
+      aiDeckId === STUB_DECK_ID ? null : decks.find((d) => d.id === aiDeckId) ?? null
+
+    if (human) {
+      const oppDeck = ai ?? human
+      let deckList = toPhaseDeckList(human, oppDeck)
+      deckList = {
+        ...deckList,
+        player: sanitizePhasePlayer(deckList.player, 'Mountain'),
+        opponent: sanitizePhasePlayer(deckList.opponent, 'Island'),
+        ai_decks: [sanitizePhasePlayer(deckList.opponent, 'Island')],
+      }
+      const note = ai
+        ? `Saved decks: ${human.name} vs ${ai.name}`
+        : `Saved deck ${human.name} (AI mirrors you)`
+      setStartNote(note)
+      return deckList
+    }
+    setStartNote('Using built-in basics stubs (no saved deck selected)')
+    return goldfishStubDecks()
+  }, [humanDeckId, aiDeckId, decks])
 
   const boot = async () => {
     setBusy(true)
@@ -141,54 +200,64 @@ export function EnginePlayPage() {
     }
   }
 
-  const startGame = async () => {
+  const launchWithDeckList = async (deckList: PhaseDeckList, label: string) => {
     if (!adapter.isReady) {
       await boot()
       if (!adapter.isReady) return
     }
     setBusy(true)
-    setStartNote(null)
     try {
-      const human =
-        humanDeckId === STUB_DECK_ID
-          ? null
-          : decks.find((d) => d.id === humanDeckId) ?? null
-      const ai =
-        aiDeckId === STUB_DECK_ID
-          ? null
-          : decks.find((d) => d.id === aiDeckId) ?? null
-
-      let deckList
-      if (human) {
-        const oppDeck = ai ?? human
-        deckList = toPhaseDeckList(human, oppDeck)
-        deckList = {
-          ...deckList,
-          player: sanitizePhasePlayer(deckList.player, 'Mountain'),
-          opponent: sanitizePhasePlayer(deckList.opponent, 'Island'),
-          ai_decks: [sanitizePhasePlayer(deckList.opponent, 'Island')],
-        }
-        const note = ai
-          ? `Saved decks: ${human.name} vs ${ai.name}`
-          : `Saved deck ${human.name} (AI mirrors you)`
-        setStartNote(note)
-        pushLog(note)
-      } else {
-        deckList = goldfishStubDecks()
-        setStartNote('Using built-in basics stubs (no saved deck selected)')
-        pushLog('Start: basics stubs (no IndexedDB deck for you)')
-      }
-
-      adapter.startGame(deckList, { seed: Date.now() % 1e9, playerCount: 2 })
+      lastDeckList.current = deckList
+      setGameLog([])
+      const initRaw = adapter.startGame(deckList, {
+        seed: Date.now() % 1e9,
+        playerCount: 2,
+      })
+      ingestResults([initRaw])
       pushLog(
-        `Game started: ${deckList.player.commander[0] ?? '?'} vs ${deckList.opponent.commander[0] ?? '?'}`,
+        `${label}: ${deckList.player.commander[0] ?? '?'} vs ${deckList.opponent.commander[0] ?? '?'}`,
       )
       const driven = adapter.driveOpponents({ maxSteps: 40 })
-      if (driven.steps) pushLog(`Auto-drove opponents ${driven.steps} steps (${driven.stoppedReason})`)
+      if (driven.results.length) ingestResults(driven.results)
+      if (driven.steps)
+        pushLog(`Auto-drove opponents ${driven.steps} steps (${driven.stoppedReason})`)
       await syncFromEngine()
       setSetupOpen(false)
+      setLogOpen(true)
     } catch (err) {
       pushLog(`Start failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const startGame = async () => {
+    setStartNote(null)
+    const deckList = buildDeckList()
+    await launchWithDeckList(deckList, 'Game started')
+  }
+
+  const rematch = async () => {
+    const deckList = lastDeckList.current ?? buildDeckList()
+    await launchWithDeckList(deckList, 'Rematch')
+  }
+
+  const concede = async () => {
+    setBusy(true)
+    try {
+      try {
+        const result: PhaseSubmitResult = adapter.submitAction(buildConcedeAction(0), 0)
+        ingestResults([result])
+        pushLog('You conceded')
+      } catch (err) {
+        pushLog(
+          `Concede action unavailable — leaving table (${err instanceof Error ? err.message : String(err)})`,
+        )
+      }
+      adapter.clear()
+      setBoard(null)
+      setSetupOpen(true)
+      setStartNote((n) => (n ? `${n} · conceded` : 'Conceded'))
     } finally {
       setBusy(false)
     }
@@ -197,9 +266,11 @@ export function EnginePlayPage() {
   const submit = async (action: PhaseGameAction) => {
     setBusy(true)
     try {
-      adapter.submitAction(action, 0)
+      const result = adapter.submitAction(action, 0)
+      ingestResults([result])
       pushLog(`You: ${summarizeAction(action)}`)
       const driven = adapter.driveOpponents({ maxSteps: 60 })
+      if (driven.results.length) ingestResults(driven.results)
       if (driven.steps) pushLog(`AI drove ${driven.steps} (${driven.stoppedReason})`)
       await syncFromEngine()
     } catch (err) {
@@ -210,16 +281,17 @@ export function EnginePlayPage() {
     }
   }
 
-  /** Chain mana taps without AI between them (still Phase-legal only). */
   const submitChain = async (actions: PhaseGameAction[]) => {
     if (!actions.length) return
     setBusy(true)
     try {
       for (const action of actions) {
-        adapter.submitAction(action, 0)
+        const result = adapter.submitAction(action, 0)
+        ingestResults([result])
         pushLog(`You: ${summarizeAction(action)}`)
       }
       const driven = adapter.driveOpponents({ maxSteps: 60 })
+      if (driven.results.length) ingestResults(driven.results)
       if (driven.steps) pushLog(`AI drove ${driven.steps} (${driven.stoppedReason})`)
       await syncFromEngine()
     } catch (err) {
@@ -234,6 +306,7 @@ export function EnginePlayPage() {
     setBusy(true)
     try {
       const driven = adapter.driveOpponents({ maxSteps: 40 })
+      if (driven.results.length) ingestResults(driven.results)
       pushLog(`Drive: ${driven.steps} (${driven.stoppedReason})`)
       await syncFromEngine()
     } finally {
@@ -272,26 +345,48 @@ export function EnginePlayPage() {
     </>
   )
 
+  const inGame = Boolean(board)
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-3 px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-lg font-semibold text-white">Phase Engine</h1>
           <p className="text-xs text-slate-400">
-            Pick saved decks (IndexedDB) · cyan = legal · Pass dock stays on screen
+            Saved decks · mana pool · Phase game log · concede / rematch
           </p>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {inGame && (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void rematch()}
+                className="min-h-10 rounded-md bg-emerald-800 px-3 py-2 text-xs font-medium text-emerald-50 ring-1 ring-emerald-600/50 hover:bg-emerald-700 disabled:opacity-50"
+              >
+                Rematch
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void concede()}
+                className="min-h-10 rounded-md bg-rose-950 px-3 py-2 text-xs font-medium text-rose-100 ring-1 ring-rose-700/50 hover:bg-rose-900 disabled:opacity-50"
+              >
+                Concede
+              </button>
+            </>
+          )}
           <button
             type="button"
-            className="rounded-md bg-slate-800 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+            className="min-h-10 rounded-md bg-slate-800 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
             onClick={() => setSetupOpen((v) => !v)}
           >
             {setupOpen ? 'Hide setup' : 'Setup'}
           </button>
           <Link
             to="/"
-            className="rounded-md bg-slate-800 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+            className="min-h-10 rounded-md bg-slate-800 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
           >
             Legacy table
           </Link>
@@ -396,6 +491,16 @@ export function EnginePlayPage() {
             >
               Start vs AI
             </button>
+            {lastDeckList.current && (
+              <button
+                type="button"
+                disabled={busy || !adapter.isReady}
+                onClick={() => void rematch()}
+                className="min-h-11 rounded-md bg-emerald-900 px-4 py-2 text-sm font-medium text-emerald-100 ring-1 ring-emerald-700/40 hover:bg-emerald-800 disabled:opacity-50"
+              >
+                Rematch
+              </button>
+            )}
             <button
               type="button"
               disabled={busy}
@@ -416,6 +521,8 @@ export function EnginePlayPage() {
           onSubmitChain={(acts) => void submitChain(acts)}
           onDriveAi={() => void driveAi()}
           onPreviewMana={(a) => adapter.previewManaPayment(a, 0)}
+          onConcede={() => void concede()}
+          onRematch={() => void rematch()}
         />
       )}
 
@@ -426,6 +533,50 @@ export function EnginePlayPage() {
         </div>
       )}
 
+      {/* Phase game log — collapsible, phone-friendly */}
+      <div className="rounded-xl border border-slate-800 bg-slate-950/70">
+        <button
+          type="button"
+          className="flex min-h-11 w-full items-center justify-between gap-2 px-3 py-2 text-left"
+          onClick={() => setLogOpen((v) => !v)}
+        >
+          <span className="text-xs font-medium text-slate-300">
+            Game log
+            <span className="ml-2 tabular-nums text-slate-500">{gameLog.length}</span>
+          </span>
+          <span className="text-[10px] uppercase tracking-wide text-slate-500">
+            {logOpen ? 'Hide' : 'Show'}
+          </span>
+        </button>
+        {logOpen && (
+          <div className="border-t border-slate-800 px-2 pb-2 pt-1">
+            <ul className="max-h-40 space-y-0.5 overflow-y-auto overscroll-contain font-mono text-[11px] text-slate-400 sm:max-h-56">
+              {gameLog.length === 0 && (
+                <li className="px-1 py-2 text-slate-600">No Phase log entries yet</li>
+              )}
+              {gameLog.map((line) => (
+                <li
+                  key={line.id + '-' + line.seq}
+                  className={
+                    line.importance === 'Essential'
+                      ? 'rounded px-1 text-slate-200'
+                      : line.importance === 'Context'
+                        ? 'rounded px-1 text-slate-300'
+                        : 'rounded px-1 text-slate-500'
+                  }
+                >
+                  <span className="mr-1.5 tabular-nums text-slate-600">
+                    T{line.turn || '·'}
+                  </span>
+                  {line.text}
+                </li>
+              ))}
+              <div ref={logEndRef} />
+            </ul>
+          </div>
+        )}
+      </div>
+
       {goldfish && (
         <div className="rounded-lg border border-violet-500/30 bg-violet-950/30 px-3 py-2 text-xs text-violet-100">
           <strong>Goldfish</strong> · {goldfish.stoppedReason} · turns {goldfish.turns} · steps{' '}
@@ -434,14 +585,16 @@ export function EnginePlayPage() {
         </div>
       )}
 
-      <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-        <p className="mb-2 text-xs font-medium text-slate-400">Log</p>
-        <ul className="max-h-28 space-y-0.5 overflow-auto font-mono text-[11px] text-slate-500 sm:max-h-36">
-          {log.map((l, i) => (
+      <details className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+        <summary className="cursor-pointer text-xs font-medium text-slate-500">
+          Client debug log ({clientLog.length})
+        </summary>
+        <ul className="mt-2 max-h-28 space-y-0.5 overflow-auto font-mono text-[11px] text-slate-600">
+          {clientLog.map((l, i) => (
             <li key={i}>{l}</li>
           ))}
         </ul>
-      </div>
+      </details>
     </div>
   )
 }

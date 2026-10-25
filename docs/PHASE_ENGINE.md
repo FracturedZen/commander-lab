@@ -95,11 +95,12 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 | `headlessGoldfish.ts` | N-step AI vs AI without UI |
 | `phaseStateView.ts` | ClientGameState → Arena board view + art hydrate |
 | `engineInteraction.ts` | Targeting / combat / mana / discard / mode helpers (display-only) |
+| `phaseGameLog.ts` | ActionResult `log_entries` / events → compact UI lines; mana pool aggregates; Concede builder |
 | `config.ts` | `ENGINE_MODE`, CDN URLs |
 | `phase-worker.js` | optional Web Worker protocol (public/) |
-| `../features/engine/EngineBoard.tsx` | Arena board + phone sticky action dock (WaitingFor banners + Pass); stack rail, targeting, combat, mana/…, ActivateAbility, priority banner, command cast+spellCosts |
+| `../features/engine/EngineBoard.tsx` | Arena board + phone sticky action dock (WaitingFor banners + Pass); stack rail, targeting, combat, mana chrome, ActivateAbility, priority banner, command cast+spellCosts, Concede/Rematch |
 
-## How to play (v0.6.9+)
+## How to play (v0.7.0+)
 
 1. Open https://fracturedzen.github.io/commander-lab/engine (or local `/engine`).
 2. **Boot Phase** (first time: ~39 MB WASM + ~96 MB card-data).
@@ -107,6 +108,10 @@ cp path/to/engine_wasm_bg.wasm /workspace/commander-lab/public/engine/
 4. Arena-style board reflects Phase zones (hand fan, BF art chips, lands, command, life). **Cyan** = legal; **rose** = targets / discard / zone / Phyrexian; **orange** = combat / OrderTriggers; **amber** = mana pay / pool pin / PayAmount; **fuchsia** = Choose X; **teal** = Assist; **cyan** = Scry/Surveil; **indigo** = reorder (Ripple/DigRest/Planar); **emerald** = Search/Dig/Reveal/zone pick; **lime** = ReplacementChoice. **Pay:** Auto | Manual | Sac-safe stamps `payment_mode` on casts (Phase APIs only). Manual / Sac-safe → `ManaPayment` / `ManaSourceSelection` with board glow + Confirm / CancelCast. **SpendPoolMana / UnspendPoolMana** pin UI from `mana_pool` + `pinned_pool_units`. **PhyrexianPayment** per-shard Mana/Life toggles → `SubmitPhyrexianChoices`. **ChooseXValue** → `ChooseX`. **AssistChoosePlayer** / **AssistPayment** → `ChooseAssistPlayer` / `CommitAssistPayment`. **ScryChoice** / **SurveilChoice** keep-on-top → `SelectCards`. **RippleBottomOrder** / **RevealUntilBottomOrder** / **DigRestSplitChoice** / **ArrangePlanarDeckTopChoice** reorder → `SelectCards`. **SearchChoice** / **SearchPartitionChoice** / **DigChoice** / **RevealChoice** / **ChooseFromZoneChoice** subset pick → `SelectCards`. **OrderTriggers** → `OrderTriggers {order}`. **ReplacementChoice** → `ChooseReplacement` / `ChooseReplacementAndRemember` (Phase candidates only). **PayAmountChoice** → `SubmitPayAmount`. **CrewVehicle/SaddleMount** board multi-select (sum Phase `contributions`) → `CrewVehicle`/`SaddleMount`. **EquipTarget/StationTarget** single glow-pick → `Equip`/`ActivateStation`. **OptionalCostChoice** Pay/Don't → `DecideOptionalCost`. **UnlessPayment** / **UnlessPaymentChooseCost** → `PayUnlessCost` / `ChooseUnlessCostBranch`. **TargetSelection/TriggerTargetSelection** slot step (object glow + player buttons, optional Skip) → `ChooseTarget`. **MultiTargetSelection** → `SelectCards`. **OptionalEffectChoice/OpponentMayChoice/TributeChoice** → `DecideOptionalEffect`. **PairChoice/CopyTargetChoice/DamageSourceChoice** glow-pick (+ Skip when Phase allows) → `ChoosePair`/`ChooseTarget`/`ChooseDamageSource`. **ActivateAbility** board glow → submit with `payment_mode` (same ManaPayment / TargetSelection / OptionalCost WaitingFor as casts; no invented costs). **Priority banner** when you hold priority with stack or legal responses (Pass vs hold). **Command zone** chips show Phase `spellCosts` (tax/reductions) + **Cast** badge when `CastSpell` is legal. Discard / mode / EffectZoneChoice glow+confirm. Multi-target attack picker. Mulligan banner. **Stack rail** (right) from `derived.stack_display_groups` + `stack_entry_details` — names/art when hydratable, **Top** highlight. **AssignCombatDamage** / **AssignBlockerDamage** board glow + amount steppers / as-though-unblocked (Phase modes only). Seat chrome: life + **poison** + **commander damage** from Phase player / `derived.commander_damage_by_attacker`. **Pass** sticky bottom dock on phone (banners/wizards scroll above Pass; desktop keeps top banners + FAB). Rail **stops** from real `waiting_for` (display-only). **Show all actions** fallback. `objectNames` map labels off-board library picks.
 5. No free DnD on this page — only engine-legal submits.
 6. **Headless goldfish** runs stub basics decks with Phase Medium AI until turn/step limit.
+7. **Game log** (collapsible) merges Phase `log_entries` from each ActionResult; falls back to summarizing `events` when entries are absent. Phone-friendly; auto-scrolls when open.
+8. **Mana pool** chrome always shows seat 0 `mana_pool` (color pips + counts) on the board and sticky dock — not only during payment.
+9. **Concede** submits Phase `Concede { player_id }` then clears table back to setup. **Rematch** reuses the last deck list via `startGame` (no Boot dance when WASM is already ready).
+
 
 ## Headless / AI
 
@@ -119,7 +124,8 @@ Prefer Phase built-in AI (`get_ai_action_proposal`, difficulty `Medium`) before 
 - Stack visibility from Phase `derived.stack_display_groups` / `stack_entry_details` only.
 - Board UX covers Scry/Surveil, Ripple/RevealUntil/DigRest/ArrangePlanar, Search(+partition)/Dig/Reveal/ChooseFromZone, OrderTriggers, ReplacementChoice, PayAmountChoice, **CrewVehicle/SaddleMount** (Phase `contributions` sum), **EquipTarget/StationTarget**, **OptionalCostChoice**, **UnlessPayment** / **UnlessPaymentChooseCost**, **TargetSelection/TriggerTargetSelection** (`ChooseTarget` via `selection.current_legal_targets`), **MultiTargetSelection**, **OptionalEffectChoice/OpponentMayChoice/TributeChoice**, **PairChoice/CopyTargetChoice/DamageSourceChoice** from Phase `waiting_for` shapes only — never invents options. ActivateAbility reuses cast payment/target/optional WaitingFor wizards (Phase lists only). Command-zone cast uses Phase `spellCosts` + legal `CastSpell` glow — no client tax math. Remaining rarer WaitingFor (vote / draft / empty-candidate, **Banding**) still fall through to **Show all actions**.
 - Phase rail stops are display-only (derived from WaitingFor); they do not gate Pass or invent phase authority.
-- Engine boot picks decks from IndexedDB (v0.6.9); stub only when chosen.
+- Engine boot picks decks from IndexedDB (v0.6.9+); stub only when chosen.
+- Game log / mana chrome / Concede+Rematch (v0.7.0): Phase-authored only; rematch keeps deck picks without re-Boot when ready.
 - Lazy-load / compress card-data further; optional Worker boot path.
 - Vendor WASM only if Pages bandwidth allows; document hash in `manifest.json` on upgrade.
 - Local `build-wasm.sh` may take a long time on the box; CDN path is the supported deploy path.

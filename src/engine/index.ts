@@ -40,3 +40,17 @@ export {
   derivedEngineStops,
 } from './engineInteraction'
 export type { WaitingDetail, CastPaymentModeType } from './engineInteraction'
+
+export {
+  unwrapActionPayload,
+  linesFromActionPayload,
+  mergeLogLines,
+  formatLogEntry,
+  formatPhaseEvent,
+  aggregateManaPool,
+  manaCountsEntries,
+  buildConcedeAction,
+  MANA_PIP_GLYPH,
+  MANA_PIP_CLASS,
+} from './phaseGameLog'
+export type { PhaseLogLine, PhaseGameLogEntry, PhaseManaCounts } from './phaseGameLog'

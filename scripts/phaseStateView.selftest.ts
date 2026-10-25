@@ -5,6 +5,16 @@ import {
   unwrapPhaseState,
 } from '../src/engine/phaseStateView.ts'
 import { toPhaseDeckList, deckToPhasePlayer } from '../src/engine/deckMap'
+import {
+  unwrapActionPayload,
+  linesFromActionPayload,
+  mergeLogLines,
+  formatLogEntry,
+  formatPhaseEvent,
+  aggregateManaPool,
+  manaCountsEntries,
+  buildConcedeAction,
+} from '../src/engine/phaseGameLog.ts'
 
 function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg)
@@ -933,3 +943,66 @@ console.log('phaseStateView.selftest + engineInteraction: ok')
   assert(list.ai_decks?.[0]?.commander[0] === 'Aesi, Tyrant of Gyre Strait', 'ai_decks')
 }
 console.log('phaseStateView.selftest: ok (incl. v0.6.9 deckMap)')
+
+// --- v0.7.0 game log / mana / concede helpers ---
+{
+  const entry = {
+    seq: 12,
+    turn: 2,
+    phase: 'PreCombatMain',
+    category: 'Cast',
+    segments: [
+      { type: 'PlayerName', value: { player_id: 0 } },
+      { type: 'Text', value: ' casts ' },
+      { type: 'CardName', value: { name: 'Sol Ring', object_id: 7 } },
+      { type: 'Text', value: ' for ' },
+      { type: 'Mana', value: '1' },
+    ],
+    presentation: { importance: 'Essential' },
+  }
+  const line = formatLogEntry(entry)
+  assert(line.text.includes('Sol Ring') && line.text.includes('You'), 'formatLogEntry text')
+  assert(line.importance === 'Essential', 'importance')
+
+  const payload = {
+    status: 'ok',
+    result: {
+      events: [{ type: 'LandPlayed', data: { object_id: 9, player_id: 0 } }],
+      log_entries: [entry],
+    },
+  }
+  const un = unwrapActionPayload(payload)
+  assert(un.logEntries.length === 1, 'unwrap log_entries')
+  assert(un.events.length === 1, 'unwrap events')
+  const fromLog = linesFromActionPayload(payload)
+  assert(fromLog.length === 1 && fromLog[0].text.includes('Sol Ring'), 'prefer log_entries')
+
+  const evOnly = linesFromActionPayload({
+    events: [
+      { type: 'LifeChanged', data: { player_id: 1, amount: -3, new_total: 37 } },
+      { type: 'PermanentTapped', data: { object_id: 1 } },
+    ],
+  })
+  assert(evOnly.length === 1 && evOnly[0].text.includes('Life'), 'event fallback skips tap noise')
+  assert(formatPhaseEvent({ type: 'GameStarted' }) === 'Game started', 'GameStarted')
+
+  const merged = mergeLogLines(fromLog, [
+    { id: 'x', seq: 13, turn: 2, phase: '', category: '', text: 'Pass', importance: 'Detail' },
+    fromLog[0],
+  ])
+  assert(merged.length === 2, 'merge dedupe + append')
+
+  const counts = aggregateManaPool([
+    { color: 'Red' },
+    { color: 'Red' },
+    { color: 'Blue' },
+    { color: 'Snow' },
+  ])
+  assert(counts.Red === 2 && counts.Blue === 1 && counts.total === 4, 'aggregateManaPool')
+  const rows = manaCountsEntries(counts)
+  assert(rows[0].color === 'Blue' && rows.some((r) => r.color === 'Snow'), 'manaCountsEntries order')
+
+  const concede = buildConcedeAction(0)
+  assert(concede.type === 'Concede' && concede.data.player_id === 0, 'buildConcedeAction')
+}
+console.log('phaseStateView.selftest: ok (incl. v0.7.0 gameLog/mana/concede)')

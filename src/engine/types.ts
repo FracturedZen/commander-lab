@@ -58,6 +58,10 @@ export type PhaseLegalActions = {
 export type PhaseSubmitResult = {
   status?: string
   events?: unknown[]
+  /** Phase-authored game log lines (preferred over raw events). */
+  log_entries?: unknown[]
+  logEntries?: unknown[]
+  waiting_for?: unknown
   rejection?: { message?: string; [key: string]: unknown }
   result?: unknown
   [key: string]: unknown
